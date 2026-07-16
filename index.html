@@ -112,6 +112,28 @@
     50% { filter: brightness(1.9) saturate(2) hue-rotate(-20deg); }
   }
 
+  .tile.special {
+    box-shadow: 0 0 0 3px rgba(255,255,255,0.85), 0 0 16px 5px rgba(255,255,255,0.55),
+      inset 0 -4px 6px rgba(0,0,0,0.25), inset 0 3px 4px rgba(255,255,255,0.3);
+    animation: specialPulse 1.2s ease-in-out infinite;
+  }
+
+  .tile.special::after {
+    content: '✦';
+    position: absolute;
+    top: 1px;
+    right: 4px;
+    font-size: 0.9rem;
+    color: #fff;
+    text-shadow: 0 0 6px rgba(255,255,255,0.9);
+    pointer-events: none;
+  }
+
+  @keyframes specialPulse {
+    0%, 100% { filter: brightness(1) saturate(1.1); }
+    50% { filter: brightness(1.55) saturate(1.7); }
+  }
+
   #message {
     margin-top: 14px;
     min-height: 24px;
@@ -148,7 +170,7 @@
 </head>
 <body>
   <h1>💎 BEJEWELED 💎</h1>
-  <div class="subtitle">Swap adjacent gems to match 3 or more — click, drag, or swipe</div>
+  <div class="subtitle">Match 4 in a row for a special gem that blasts a 3×3 area when cleared</div>
 
   <div class="hud">
     <div>
@@ -217,8 +239,10 @@
 
   // ---- pure matching helpers (operate on plain 2D arrays of gem indices) ----
 
-  function findMatches(g) {
-    const matched = new Set();
+  // Returns both the flattened set of matched cells and the individual runs
+  // (needed to tell 4-in-a-row runs apart so they can spawn a special gem).
+  function findMatchesDetailed(g) {
+    const runs = [];
 
     for (let r = 0; r < SIZE; r++) {
       let runStart = 0;
@@ -226,7 +250,9 @@
         const same = c < SIZE && g[r][c] !== null && g[r][c] === g[r][runStart];
         if (!same) {
           if (c - runStart >= 3) {
-            for (let k = runStart; k < c; k++) matched.add(r * SIZE + k);
+            const run = [];
+            for (let k = runStart; k < c; k++) run.push({ r, c: k });
+            runs.push(run);
           }
           runStart = c;
         }
@@ -239,14 +265,29 @@
         const same = r < SIZE && g[r][c] !== null && g[r][c] === g[runStart][c];
         if (!same) {
           if (r - runStart >= 3) {
-            for (let k = runStart; k < r; k++) matched.add(k * SIZE + c);
+            const run = [];
+            for (let k = runStart; k < r; k++) run.push({ r: k, c });
+            runs.push(run);
           }
           runStart = r;
         }
       }
     }
 
-    return [...matched].map(i => ({ r: Math.floor(i / SIZE), c: i % SIZE }));
+    const cellSet = new Set();
+    for (const run of runs) {
+      for (const cell of run) cellSet.add(`${cell.r},${cell.c}`);
+    }
+    const cells = [...cellSet].map(key => {
+      const [r, c] = key.split(',').map(Number);
+      return { r, c };
+    });
+
+    return { cells, runs };
+  }
+
+  function findMatches(g) {
+    return findMatchesDetailed(g).cells;
   }
 
   function hasPossibleMove(g) {
@@ -329,10 +370,21 @@
     el.addEventListener('pointerup', onPointerUp);
     el.addEventListener('pointercancel', onPointerCancel);
     board.appendChild(el);
-    const tile = { id: nextId++, gem, r, c, el, scale: 1 };
+    const tile = { id: nextId++, gem, r, c, el, scale: 1, special: false };
     el._tile = tile;
     setPos(tile, r, c, true);
     return tile;
+  }
+
+  function markSpecial(tile) {
+    tile.special = true;
+    tile.el.classList.add('special');
+    const x = tile.c * CELL;
+    const y = tile.r * CELL;
+    tile.el.style.transform = `translate(${x}px, ${y}px) scale(1.35)`;
+    setTimeout(() => {
+      tile.el.style.transform = `translate(${x}px, ${y}px) scale(1)`;
+    }, 220);
   }
 
   function clearBoard() {
@@ -486,29 +538,104 @@
 
     moves++;
     movesEl.textContent = moves;
-    await resolveMatches();
+    await resolveMatches({ from: a, to: b });
     locked = false;
   }
 
-  async function resolveMatches() {
+  function cellKey(r, c) {
+    return `${r},${c}`;
+  }
+
+  function parseCellKey(key) {
+    const [r, c] = key.split(',').map(Number);
+    return { r, c };
+  }
+
+  async function resolveMatches(swapContext) {
     let chain = 0;
+    let firstPass = true;
     while (true) {
-      const matches = findMatches(snapshotGrid());
-      if (matches.length === 0) break;
+      const { cells: matchedCells, runs } = findMatchesDetailed(snapshotGrid());
+      if (matchedCells.length === 0) break;
       chain++;
 
+      // Runs of 4+ spawn a special gem at one of their cells instead of being cleared.
+      const spawnMap = new Map();
+      for (const run of runs) {
+        if (run.length < 4) continue;
+        const isFree = cell => !grid[cell.r][cell.c] || !grid[cell.r][cell.c].special;
+        let spawnCell = null;
+        if (firstPass && swapContext) {
+          spawnCell = run.find(cell =>
+            isFree(cell) &&
+            ((cell.r === swapContext.to.r && cell.c === swapContext.to.c) ||
+              (cell.r === swapContext.from.r && cell.c === swapContext.from.c))
+          );
+        }
+        if (!spawnCell) spawnCell = run.find(isFree) || run[Math.floor(run.length / 2)];
+        spawnMap.set(cellKey(spawnCell.r, spawnCell.c), true);
+      }
+      firstPass = false;
+
+      const toClear = new Set(matchedCells.map(({ r, c }) => cellKey(r, c)));
+      for (const key of spawnMap.keys()) toClear.delete(key);
+
+      // Any special gem that gets cleared blasts its 3x3 neighborhood, which can
+      // chain into other special gems caught in the blast.
+      const processedBombs = new Set();
+      let expanded = true;
+      while (expanded) {
+        expanded = false;
+        for (const key of [...toClear]) {
+          const { r, c } = parseCellKey(key);
+          const tile = grid[r][c];
+          if (!tile || !tile.special || processedBombs.has(tile.id)) continue;
+          processedBombs.add(tile.id);
+          for (let dr = -1; dr <= 1; dr++) {
+            for (let dc = -1; dc <= 1; dc++) {
+              if (dr === 0 && dc === 0) continue;
+              const nr = r + dr;
+              const nc = c + dc;
+              if (nr < 0 || nr >= SIZE || nc < 0 || nc >= SIZE) continue;
+              const nKey = cellKey(nr, nc);
+              if (!toClear.has(nKey)) {
+                toClear.add(nKey);
+                expanded = true;
+              }
+            }
+          }
+        }
+      }
+      // A blast reaching a cell that was about to spawn a special gem destroys it instead.
+      for (const key of toClear) spawnMap.delete(key);
+
       const removed = [];
-      for (const { r, c } of matches) {
+      for (const key of toClear) {
+        const { r, c } = parseCellKey(key);
         const tile = grid[r][c];
+        if (!tile) continue;
         removed.push(tile);
         setScale(tile, 0);
         grid[r][c] = null;
       }
 
-      const gained = matches.length * 10 * chain;
+      for (const key of spawnMap.keys()) {
+        const { r, c } = parseCellKey(key);
+        const tile = grid[r][c];
+        if (tile) markSpecial(tile);
+      }
+
+      const bombBonus = processedBombs.size * 50;
+      const gained = toClear.size * 10 * chain + bombBonus;
       score += gained;
       scoreEl.textContent = score;
-      messageEl.textContent = chain > 1 ? `Combo x${chain}! +${gained}` : `Match! +${gained}`;
+      if (processedBombs.size > 0) {
+        messageEl.textContent = `Boom! +${gained}`;
+      } else if (spawnMap.size > 0) {
+        messageEl.textContent = `Special gem created! +${gained}`;
+      } else {
+        messageEl.textContent = chain > 1 ? `Combo x${chain}! +${gained}` : `Match! +${gained}`;
+      }
 
       await sleep(MATCH_MS);
       for (const tile of removed) tile.el.remove();
