@@ -65,15 +65,19 @@
   }
 
   #board {
-    display: grid;
+    position: relative;
     background: var(--board-bg);
     padding: var(--gap);
     border-radius: 12px;
     box-shadow: 0 10px 40px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(255,255,255,0.05);
-    gap: var(--gap);
+    overflow: hidden;
+    touch-action: none;
   }
 
   .tile {
+    position: absolute;
+    top: var(--gap);
+    left: var(--gap);
     width: var(--tile-size);
     height: var(--tile-size);
     border-radius: 10px;
@@ -81,43 +85,31 @@
     align-items: center;
     justify-content: center;
     font-size: calc(var(--tile-size) * 0.55);
-    cursor: pointer;
+    cursor: grab;
     user-select: none;
-    position: relative;
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    -webkit-user-drag: none;
+    touch-action: none;
     box-shadow: inset 0 -4px 6px rgba(0,0,0,0.25), inset 0 3px 4px rgba(255,255,255,0.3);
+    transition: transform 0.26s cubic-bezier(0.34, 1.2, 0.4, 1), opacity 0.26s ease, filter 0.2s ease, box-shadow 0.15s ease;
+    will-change: transform;
   }
 
   .tile:hover {
-    transform: scale(1.06);
+    filter: brightness(1.12);
   }
 
   .tile.selected {
     box-shadow: 0 0 0 3px #fff, 0 0 16px 4px rgba(255,255,255,0.7);
-    transform: scale(1.08);
+    filter: brightness(1.15);
   }
 
-  .tile.matched {
-    animation: pop 0.3s ease forwards;
+  .tile.invalid {
+    animation: invalidFlash 0.3s ease;
   }
 
-  .tile.falling {
-    animation: none;
-  }
-
-  @keyframes pop {
-    0% { transform: scale(1); opacity: 1; }
-    100% { transform: scale(0.2); opacity: 0; }
-  }
-
-  .tile.swap-invalid {
-    animation: shake 0.3s ease;
-  }
-
-  @keyframes shake {
-    0%, 100% { transform: translateX(0); }
-    25% { transform: translateX(-6px); }
-    75% { transform: translateX(6px); }
+  @keyframes invalidFlash {
+    0%, 100% { filter: none; }
+    50% { filter: brightness(1.9) saturate(2) hue-rotate(-20deg); }
   }
 
   #message {
@@ -156,7 +148,7 @@
 </head>
 <body>
   <h1>💎 BEJEWELED 💎</h1>
-  <div class="subtitle">Swap adjacent gems to match 3 or more</div>
+  <div class="subtitle">Swap adjacent gems to match 3 or more — click, drag, or swipe</div>
 
   <div class="hud">
     <div>
@@ -185,6 +177,14 @@
 (function () {
   const SIZE = 8;
   const GEMS = ['🔴', '🟠', '🟡', '🟢', '🔵', '🟣'];
+  const TILE = 60;
+  const GAP = 6;
+  const CELL = TILE + GAP;
+  const SWAP_MS = 280;
+  const MATCH_MS = 300;
+  const FALL_MS = 320;
+  const SWIPE_THRESHOLD = 18;
+
   const board = document.getElementById('board');
   const scoreEl = document.getElementById('score');
   const movesEl = document.getElementById('moves');
@@ -193,15 +193,17 @@
   const restartBtn = document.getElementById('restart');
   const shuffleBtn = document.getElementById('shuffle');
 
-  board.style.gridTemplateColumns = `repeat(${SIZE}, var(--tile-size))`;
-  board.style.gridTemplateRows = `repeat(${SIZE}, var(--tile-size))`;
+  board.style.width = (SIZE * TILE + (SIZE - 1) * GAP) + 'px';
+  board.style.height = (SIZE * TILE + (SIZE - 1) * GAP) + 'px';
 
-  let grid = [];
+  let grid = Array.from({ length: SIZE }, () => Array(SIZE).fill(null));
   let score = 0;
   let moves = 0;
   let best = Number(localStorage.getItem('bejeweled-best') || 0);
   let selected = null;
   let locked = false;
+  let nextId = 0;
+  let pointerState = null;
 
   bestEl.textContent = best;
 
@@ -209,111 +211,11 @@
     return Math.floor(Math.random() * GEMS.length);
   }
 
-  function createInitialGrid() {
-    let g;
-    do {
-      g = [];
-      for (let r = 0; r < SIZE; r++) {
-        const row = [];
-        for (let c = 0; c < SIZE; c++) {
-          let gem;
-          do {
-            gem = randomGem();
-          } while (
-            (c >= 2 && row[c - 1] === gem && row[c - 2] === gem) ||
-            (r >= 2 && g[r - 1][c] === gem && g[r - 2][c] === gem)
-          );
-          row.push(gem);
-        }
-        g.push(row);
-      }
-    } while (findMatches(g).length === 0 && !hasPossibleMove(g));
-    return g;
+  function sleep(ms) {
+    return new Promise(res => setTimeout(res, ms));
   }
 
-  function render() {
-    board.innerHTML = '';
-    for (let r = 0; r < SIZE; r++) {
-      for (let c = 0; c < SIZE; c++) {
-        const tile = document.createElement('div');
-        tile.className = 'tile';
-        tile.dataset.r = r;
-        tile.dataset.c = c;
-        const gemIdx = grid[r][c];
-        tile.textContent = gemIdx === null ? '' : GEMS[gemIdx];
-        if (selected && selected.r === r && selected.c === c) {
-          tile.classList.add('selected');
-        }
-        tile.addEventListener('click', onTileClick);
-        board.appendChild(tile);
-      }
-    }
-  }
-
-  function onTileClick(e) {
-    if (locked) return;
-    const r = Number(e.currentTarget.dataset.r);
-    const c = Number(e.currentTarget.dataset.c);
-
-    if (!selected) {
-      selected = { r, c };
-      render();
-      return;
-    }
-
-    if (selected.r === r && selected.c === c) {
-      selected = null;
-      render();
-      return;
-    }
-
-    const isAdjacent =
-      (Math.abs(selected.r - r) === 1 && selected.c === c) ||
-      (Math.abs(selected.c - c) === 1 && selected.r === r);
-
-    if (!isAdjacent) {
-      selected = { r, c };
-      render();
-      return;
-    }
-
-    attemptSwap(selected, { r, c });
-  }
-
-  function swapCells(a, b) {
-    const tmp = grid[a.r][a.c];
-    grid[a.r][a.c] = grid[b.r][b.c];
-    grid[b.r][b.c] = tmp;
-  }
-
-  async function attemptSwap(a, b) {
-    locked = true;
-    swapCells(a, b);
-    const matches = findMatches(grid);
-
-    if (matches.length === 0) {
-      render();
-      await sleep(80);
-      const tiles = [...board.children];
-      const ai = a.r * SIZE + a.c;
-      const bi = b.r * SIZE + b.c;
-      tiles[ai].classList.add('swap-invalid');
-      tiles[bi].classList.add('swap-invalid');
-      await sleep(300);
-      swapCells(a, b);
-      selected = null;
-      render();
-      locked = false;
-      return;
-    }
-
-    moves++;
-    movesEl.textContent = moves;
-    selected = null;
-    render();
-    await resolveMatches();
-    locked = false;
-  }
+  // ---- pure matching helpers (operate on plain 2D arrays of gem indices) ----
 
   function findMatches(g) {
     const matched = new Set();
@@ -369,20 +271,238 @@
     return false;
   }
 
-  function sleep(ms) {
-    return new Promise(res => setTimeout(res, ms));
+  function genLayout() {
+    let g;
+    do {
+      g = [];
+      for (let r = 0; r < SIZE; r++) {
+        const row = [];
+        for (let c = 0; c < SIZE; c++) {
+          let gem;
+          do {
+            gem = randomGem();
+          } while (
+            (c >= 2 && row[c - 1] === gem && row[c - 2] === gem) ||
+            (r >= 2 && g[r - 1][c] === gem && g[r - 2][c] === gem)
+          );
+          row.push(gem);
+        }
+        g.push(row);
+      }
+    } while (findMatches(g).length === 0 && !hasPossibleMove(g));
+    return g;
+  }
+
+  function snapshotGrid() {
+    return grid.map(row => row.map(t => (t ? t.gem : null)));
+  }
+
+  // ---- tile objects + animated positioning ----
+
+  function setPos(tile, r, c, instant) {
+    tile.r = r;
+    tile.c = c;
+    const x = c * CELL;
+    const y = r * CELL;
+    if (instant) tile.el.style.transition = 'none';
+    tile.el.style.transform = `translate(${x}px, ${y}px) scale(${tile.scale})`;
+    if (instant) {
+      tile.el.offsetHeight;
+      tile.el.style.transition = '';
+    }
+  }
+
+  function setScale(tile, scale) {
+    tile.scale = scale;
+    const x = tile.c * CELL;
+    const y = tile.r * CELL;
+    tile.el.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+    tile.el.style.opacity = String(scale);
+  }
+
+  function createTile(r, c, gem) {
+    const el = document.createElement('div');
+    el.className = 'tile';
+    el.textContent = GEMS[gem];
+    el.addEventListener('pointerdown', onPointerDown);
+    el.addEventListener('pointermove', onPointerMove);
+    el.addEventListener('pointerup', onPointerUp);
+    el.addEventListener('pointercancel', onPointerCancel);
+    board.appendChild(el);
+    const tile = { id: nextId++, gem, r, c, el, scale: 1 };
+    el._tile = tile;
+    setPos(tile, r, c, true);
+    return tile;
+  }
+
+  function clearBoard() {
+    for (let r = 0; r < SIZE; r++) {
+      for (let c = 0; c < SIZE; c++) grid[r][c] = null;
+    }
+    board.innerHTML = '';
+  }
+
+  function buildBoardFromLayout(layout) {
+    clearBoard();
+    for (let r = 0; r < SIZE; r++) {
+      for (let c = 0; c < SIZE; c++) {
+        grid[r][c] = createTile(r, c, layout[r][c]);
+      }
+    }
+  }
+
+  // ---- selection + input (click/tap and swipe/drag share attemptSwap) ----
+
+  function selectTile(r, c) {
+    selected = { r, c };
+    grid[r][c].el.classList.add('selected');
+  }
+
+  function clearSelection() {
+    if (selected) {
+      const t = grid[selected.r][selected.c];
+      if (t) t.el.classList.remove('selected');
+    }
+    selected = null;
+  }
+
+  function handleTap(r, c) {
+    if (locked) return;
+    if (!selected) {
+      selectTile(r, c);
+      return;
+    }
+    if (selected.r === r && selected.c === c) {
+      clearSelection();
+      return;
+    }
+    const isAdjacent =
+      (Math.abs(selected.r - r) === 1 && selected.c === c) ||
+      (Math.abs(selected.c - c) === 1 && selected.r === r);
+    if (!isAdjacent) {
+      clearSelection();
+      selectTile(r, c);
+      return;
+    }
+    const from = selected;
+    clearSelection();
+    attemptSwap(from, { r, c });
+  }
+
+  function onPointerDown(e) {
+    if (locked) return;
+    const tile = e.currentTarget._tile;
+    pointerState = {
+      pointerId: e.pointerId,
+      r: tile.r,
+      c: tile.c,
+      startX: e.clientX,
+      startY: e.clientY,
+      moved: false,
+    };
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch (err) {
+      // pointer may no longer be active (rapid tap/touch edge cases) — safe to ignore
+    }
+  }
+
+  function onPointerMove(e) {
+    if (!pointerState || pointerState.pointerId !== e.pointerId || pointerState.moved || locked) return;
+    const dx = e.clientX - pointerState.startX;
+    const dy = e.clientY - pointerState.startY;
+    if (Math.abs(dx) < SWIPE_THRESHOLD && Math.abs(dy) < SWIPE_THRESHOLD) return;
+
+    pointerState.moved = true;
+    let targetR = pointerState.r;
+    let targetC = pointerState.c;
+    if (Math.abs(dx) > Math.abs(dy)) {
+      targetC += dx > 0 ? 1 : -1;
+    } else {
+      targetR += dy > 0 ? 1 : -1;
+    }
+
+    const from = { r: pointerState.r, c: pointerState.c };
+    clearSelection();
+    if (targetR >= 0 && targetR < SIZE && targetC >= 0 && targetC < SIZE) {
+      attemptSwap(from, { r: targetR, c: targetC });
+    }
+  }
+
+  function onPointerUp(e) {
+    if (!pointerState || pointerState.pointerId !== e.pointerId) {
+      pointerState = null;
+      return;
+    }
+    const { r, c, moved } = pointerState;
+    pointerState = null;
+    if (!moved) handleTap(r, c);
+  }
+
+  function onPointerCancel() {
+    pointerState = null;
+  }
+
+  // ---- swap / match / gravity ----
+
+  function doSwap(a, b) {
+    const tileA = grid[a.r][a.c];
+    const tileB = grid[b.r][b.c];
+    grid[a.r][a.c] = tileB;
+    grid[b.r][b.c] = tileA;
+    setPos(tileB, a.r, a.c);
+    setPos(tileA, b.r, b.c);
+  }
+
+  function flashInvalid(elA, elB) {
+    elA.classList.add('invalid');
+    elB.classList.add('invalid');
+    setTimeout(() => {
+      elA.classList.remove('invalid');
+      elB.classList.remove('invalid');
+    }, 300);
+  }
+
+  async function attemptSwap(a, b) {
+    if (locked) return;
+    const tileA = grid[a.r][a.c];
+    const tileB = grid[b.r][b.c];
+    if (!tileA || !tileB) return;
+
+    locked = true;
+    const elA = tileA.el;
+    const elB = tileB.el;
+    doSwap(a, b);
+    await sleep(SWAP_MS);
+
+    const matches = findMatches(snapshotGrid());
+    if (matches.length === 0) {
+      flashInvalid(elA, elB);
+      doSwap(a, b);
+      await sleep(SWAP_MS);
+      locked = false;
+      return;
+    }
+
+    moves++;
+    movesEl.textContent = moves;
+    await resolveMatches();
+    locked = false;
   }
 
   async function resolveMatches() {
     let chain = 0;
     while (true) {
-      const matches = findMatches(grid);
+      const matches = findMatches(snapshotGrid());
       if (matches.length === 0) break;
       chain++;
 
-      const tiles = [...board.children];
+      const removed = [];
       for (const { r, c } of matches) {
-        tiles[r * SIZE + c].classList.add('matched');
+        const tile = grid[r][c];
+        removed.push(tile);
+        setScale(tile, 0);
+        grid[r][c] = null;
       }
 
       const gained = matches.length * 10 * chain;
@@ -390,22 +510,17 @@
       scoreEl.textContent = score;
       messageEl.textContent = chain > 1 ? `Combo x${chain}! +${gained}` : `Match! +${gained}`;
 
-      await sleep(280);
+      await sleep(MATCH_MS);
+      for (const tile of removed) tile.el.remove();
 
-      for (const { r, c } of matches) {
-        grid[r][c] = null;
-      }
-
-      applyGravity();
-      render();
-      await sleep(150);
+      applyGravityAnimated();
+      await sleep(FALL_MS);
     }
 
-    if (chain > 0 && !hasPossibleMove(grid)) {
+    if (chain > 0 && !hasPossibleMove(snapshotGrid())) {
       messageEl.textContent = 'No moves left — reshuffling...';
-      await sleep(600);
-      grid = createInitialGrid();
-      render();
+      await sleep(500);
+      buildBoardFromLayout(genLayout());
     }
 
     if (score > best) {
@@ -423,15 +538,28 @@
     }
   }
 
-  function applyGravity() {
+  function applyGravityAnimated() {
     for (let c = 0; c < SIZE; c++) {
-      const column = [];
-      for (let r = SIZE - 1; r >= 0; r--) {
-        if (grid[r][c] !== null) column.push(grid[r][c]);
+      const survivors = [];
+      for (let r = 0; r < SIZE; r++) {
+        const t = grid[r][c];
+        if (t) survivors.push(t);
       }
-      while (column.length < SIZE) column.push(randomGem());
-      for (let r = SIZE - 1; r >= 0; r--) {
-        grid[r][c] = column[SIZE - 1 - r];
+      const missing = SIZE - survivors.length;
+
+      for (let i = 0; i < survivors.length; i++) {
+        const targetR = missing + i;
+        const tile = survivors[i];
+        grid[targetR][c] = tile;
+        setPos(tile, targetR, c);
+      }
+
+      for (let i = 0; i < missing; i++) {
+        const targetR = i;
+        const startR = i - missing;
+        const tile = createTile(startR, c, randomGem());
+        grid[targetR][c] = tile;
+        requestAnimationFrame(() => setPos(tile, targetR, c));
       }
     }
   }
@@ -444,16 +572,14 @@
     scoreEl.textContent = '0';
     movesEl.textContent = '0';
     messageEl.textContent = '';
-    grid = createInitialGrid();
-    render();
+    buildBoardFromLayout(genLayout());
   }
 
   restartBtn.addEventListener('click', newGame);
   shuffleBtn.addEventListener('click', () => {
     if (locked) return;
-    grid = createInitialGrid();
+    buildBoardFromLayout(genLayout());
     messageEl.textContent = 'Board shuffled!';
-    render();
   });
 
   newGame();
