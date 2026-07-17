@@ -118,7 +118,7 @@
     animation: specialPulse 1.2s ease-in-out infinite;
   }
 
-  .tile.special::after {
+  .tile.special.bomb::after {
     content: '✦';
     position: absolute;
     top: 1px;
@@ -132,6 +132,53 @@
   @keyframes specialPulse {
     0%, 100% { filter: brightness(1) saturate(1.1); }
     50% { filter: brightness(1.55) saturate(1.7); }
+  }
+
+  .tile.special.wildcard {
+    background: conic-gradient(from 0deg, #ff6ec7, #ffd700, #6ecbff, #7cff6e, #ff6ec7);
+    animation: wildcardShimmer 2.4s linear infinite, specialPulse 1.2s ease-in-out infinite;
+  }
+
+  @keyframes wildcardShimmer {
+    from { filter: hue-rotate(0deg) brightness(1.05); }
+    to { filter: hue-rotate(360deg) brightness(1.05); }
+  }
+
+  .tile.zapped {
+    animation: zapFlash 0.3s ease;
+  }
+
+  @keyframes zapFlash {
+    0% { filter: brightness(1) saturate(1); }
+    35% { filter: brightness(2.3) saturate(2.6) hue-rotate(60deg); }
+    100% { filter: brightness(1) saturate(1); }
+  }
+
+  .shockwave {
+    position: absolute;
+    border-radius: 50%;
+    pointer-events: none;
+    transform: scale(0.15);
+    opacity: 1;
+    animation-name: shockwaveAnim;
+    animation-timing-function: ease-out;
+    animation-fill-mode: forwards;
+    z-index: 5;
+    background: radial-gradient(circle, rgba(255,255,255,0.95) 0%, rgba(255,190,80,0.65) 30%, rgba(255,100,60,0.25) 55%, transparent 75%);
+    box-shadow: 0 0 40px 10px rgba(255,180,80,0.55);
+  }
+
+  .shockwave.rainbow {
+    background: conic-gradient(from 0deg, #ff6ec7, #ffd700, #6ecbff, #7cff6e, #ff6ec7);
+    opacity: 0.5;
+    mix-blend-mode: screen;
+    box-shadow: 0 0 60px 16px rgba(255,255,255,0.35);
+  }
+
+  @keyframes shockwaveAnim {
+    0% { transform: scale(0.1); opacity: 1; }
+    60% { opacity: 0.75; }
+    100% { transform: scale(1); opacity: 0; }
   }
 
   #message {
@@ -170,7 +217,7 @@
 </head>
 <body>
   <h1>💎 BEJEWELED 💎</h1>
-  <div class="subtitle">Match 4 in a row for a special gem that blasts a 3×3 area when cleared</div>
+  <div class="subtitle">Match 4 for a blast gem, match 5 for a wildcard — swipe the wildcard to zap a color</div>
 
   <div class="hud">
     <div>
@@ -204,8 +251,11 @@
   const CELL = TILE + GAP;
   const SWAP_MS = 280;
   const MATCH_MS = 300;
+  const EXPLODE_MS = 500;
   const FALL_MS = 320;
   const SWIPE_THRESHOLD = 18;
+  const WILDCARD_STAGGER_MS = 35;
+  const WILDCARD_FADE_MS = 280;
 
   const board = document.getElementById('board');
   const scoreEl = document.getElementById('score');
@@ -370,21 +420,91 @@
     el.addEventListener('pointerup', onPointerUp);
     el.addEventListener('pointercancel', onPointerCancel);
     board.appendChild(el);
-    const tile = { id: nextId++, gem, r, c, el, scale: 1, special: false };
+    const tile = { id: nextId++, gem, r, c, el, scale: 1, special: null };
     el._tile = tile;
     setPos(tile, r, c, true);
     return tile;
   }
 
-  function markSpecial(tile) {
-    tile.special = true;
-    tile.el.classList.add('special');
+  // type: 'bomb' (4-match, blasts a 3x3 area when cleared) or
+  // 'wildcard' (5-match, zaps every gem of a color when swiped).
+  function markSpecial(tile, type) {
+    tile.special = type;
+    tile.el.classList.add('special', type);
+    if (type === 'wildcard') tile.el.textContent = '🌟';
     const x = tile.c * CELL;
     const y = tile.r * CELL;
-    tile.el.style.transform = `translate(${x}px, ${y}px) scale(1.35)`;
+    tile.el.style.transform = `translate(${x}px, ${y}px) scale(1.4)`;
     setTimeout(() => {
       tile.el.style.transform = `translate(${x}px, ${y}px) scale(1)`;
     }, 220);
+  }
+
+  function cellCenterPx(r, c) {
+    return { x: GAP + c * CELL + TILE / 2, y: GAP + r * CELL + TILE / 2 };
+  }
+
+  function spawnShockwave(cx, cy, opts) {
+    const wave = document.createElement('div');
+    wave.className = 'shockwave' + (opts.rainbow ? ' rainbow' : '');
+    const size = opts.size;
+    wave.style.left = cx + 'px';
+    wave.style.top = cy + 'px';
+    wave.style.width = size + 'px';
+    wave.style.height = size + 'px';
+    wave.style.marginLeft = (-size / 2) + 'px';
+    wave.style.marginTop = (-size / 2) + 'px';
+    wave.style.animationDuration = (opts.durationMs || 550) + 'ms';
+    board.appendChild(wave);
+    wave.addEventListener('animationend', () => wave.remove());
+  }
+
+  // Shatters a tile outward with a random fling + spin, used for bomb-blast cells.
+  function explodeTile(tile) {
+    const baseX = tile.c * CELL;
+    const baseY = tile.r * CELL;
+    const flingX = (Math.random() * 2 - 1) * 26;
+    const flingY = (Math.random() * 2 - 1) * 26;
+    const rot = (Math.random() * 2 - 1) * 100;
+    tile.el.style.transition = `transform ${EXPLODE_MS}ms cubic-bezier(0.2, 0.8, 0.3, 1), opacity ${EXPLODE_MS}ms ease`;
+    tile.el.style.transform = `translate(${baseX + flingX}px, ${baseY + flingY}px) scale(0) rotate(${rot}deg)`;
+    tile.el.style.opacity = '0';
+  }
+
+  // Expands a set of "r,c" cell keys to include the 3x3 blast radius of any bomb
+  // caught inside it, chaining into further bombs the blast reaches.
+  // Returns the bomb tiles that detonated and the cells destroyed purely by blast.
+  function expandBombChain(toClear) {
+    const bombOrigins = [];
+    const blastCells = new Set();
+    const processedBombs = new Set();
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      for (const key of [...toClear]) {
+        const { r, c } = parseCellKey(key);
+        const tile = grid[r][c];
+        if (!tile || tile.special !== 'bomb' || processedBombs.has(tile.id)) continue;
+        processedBombs.add(tile.id);
+        bombOrigins.push({ r, c });
+        blastCells.add(key);
+        for (let dr = -1; dr <= 1; dr++) {
+          for (let dc = -1; dc <= 1; dc++) {
+            if (dr === 0 && dc === 0) continue;
+            const nr = r + dr;
+            const nc = c + dc;
+            if (nr < 0 || nr >= SIZE || nc < 0 || nc >= SIZE) continue;
+            const nKey = cellKey(nr, nc);
+            blastCells.add(nKey);
+            if (!toClear.has(nKey)) {
+              toClear.add(nKey);
+              expanded = true;
+            }
+          }
+        }
+      }
+    }
+    return { bombOrigins, blastCells, processedBombs };
   }
 
   function clearBoard() {
@@ -527,6 +647,18 @@
     doSwap(a, b);
     await sleep(SWAP_MS);
 
+    // A wildcard always activates on swipe, regardless of whether it forms a match.
+    const wildcardTile = tileA.special === 'wildcard' ? tileA : (tileB.special === 'wildcard' ? tileB : null);
+    if (wildcardTile) {
+      const otherTile = wildcardTile === tileA ? tileB : tileA;
+      moves++;
+      movesEl.textContent = moves;
+      await triggerWildcard(wildcardTile, otherTile);
+      await resolveMatches();
+      locked = false;
+      return;
+    }
+
     const matches = findMatches(snapshotGrid());
     if (matches.length === 0) {
       flashInvalid(elA, elB);
@@ -551,6 +683,69 @@
     return { r, c };
   }
 
+  // Clears every gem matching otherTile's color (plus the wildcard itself), with
+  // a rainbow shockwave and a color-zap that ripples outward from the wildcard.
+  async function triggerWildcard(wildcardTile, otherTile) {
+    const targetColor = otherTile.gem;
+    const origin = { r: wildcardTile.r, c: wildcardTile.c };
+
+    const toClear = new Set([cellKey(origin.r, origin.c)]);
+    for (let r = 0; r < SIZE; r++) {
+      for (let c = 0; c < SIZE; c++) {
+        const t = grid[r][c];
+        if (t && t.gem === targetColor) toClear.add(cellKey(r, c));
+      }
+    }
+
+    const { bombOrigins, blastCells, processedBombs } = expandBombChain(toClear);
+
+    const removed = [];
+    for (const key of toClear) {
+      const { r, c } = parseCellKey(key);
+      const tile = grid[r][c];
+      if (!tile) continue;
+      removed.push(tile);
+      grid[r][c] = null;
+    }
+
+    const originPx = cellCenterPx(origin.r, origin.c);
+    spawnShockwave(originPx.x, originPx.y, {
+      size: SIZE * CELL * 1.6,
+      rainbow: true,
+      durationMs: 700,
+    });
+
+    let maxDelay = 0;
+    for (const tile of removed) {
+      const dist = Math.hypot(tile.r - origin.r, tile.c - origin.c);
+      const delay = dist * WILDCARD_STAGGER_MS;
+      maxDelay = Math.max(maxDelay, delay);
+      const key = cellKey(tile.r, tile.c);
+      setTimeout(() => {
+        tile.el.classList.add('zapped');
+        if (blastCells.has(key)) explodeTile(tile);
+        else setScale(tile, 0);
+      }, delay);
+    }
+    for (const origin2 of bombOrigins) {
+      const p = cellCenterPx(origin2.r, origin2.c);
+      const dist = Math.hypot(origin2.r - origin.r, origin2.c - origin.c);
+      setTimeout(() => spawnShockwave(p.x, p.y, { size: CELL * 3.2, durationMs: 550 }), dist * WILDCARD_STAGGER_MS);
+    }
+
+    const gained = removed.length * 10 + 100 + processedBombs.size * 50;
+    score += gained;
+    scoreEl.textContent = score;
+    messageEl.textContent = `Wildcard zap! +${gained}`;
+
+    const fadeMs = bombOrigins.length > 0 ? EXPLODE_MS : WILDCARD_FADE_MS;
+    await sleep(maxDelay + fadeMs);
+    for (const tile of removed) tile.el.remove();
+
+    applyGravityAnimated();
+    await sleep(FALL_MS);
+  }
+
   async function resolveMatches(swapContext) {
     let chain = 0;
     let firstPass = true;
@@ -559,10 +754,12 @@
       if (matchedCells.length === 0) break;
       chain++;
 
-      // Runs of 4+ spawn a special gem at one of their cells instead of being cleared.
+      // Runs of 4 spawn a bomb; runs of 5+ spawn a wildcard. Either survives at one
+      // cell of the run instead of being cleared with the rest.
       const spawnMap = new Map();
       for (const run of runs) {
         if (run.length < 4) continue;
+        const type = run.length >= 5 ? 'wildcard' : 'bomb';
         const isFree = cell => !grid[cell.r][cell.c] || !grid[cell.r][cell.c].special;
         let spawnCell = null;
         if (firstPass && swapContext) {
@@ -573,39 +770,16 @@
           );
         }
         if (!spawnCell) spawnCell = run.find(isFree) || run[Math.floor(run.length / 2)];
-        spawnMap.set(cellKey(spawnCell.r, spawnCell.c), true);
+        spawnMap.set(cellKey(spawnCell.r, spawnCell.c), type);
       }
       firstPass = false;
 
       const toClear = new Set(matchedCells.map(({ r, c }) => cellKey(r, c)));
       for (const key of spawnMap.keys()) toClear.delete(key);
 
-      // Any special gem that gets cleared blasts its 3x3 neighborhood, which can
-      // chain into other special gems caught in the blast.
-      const processedBombs = new Set();
-      let expanded = true;
-      while (expanded) {
-        expanded = false;
-        for (const key of [...toClear]) {
-          const { r, c } = parseCellKey(key);
-          const tile = grid[r][c];
-          if (!tile || !tile.special || processedBombs.has(tile.id)) continue;
-          processedBombs.add(tile.id);
-          for (let dr = -1; dr <= 1; dr++) {
-            for (let dc = -1; dc <= 1; dc++) {
-              if (dr === 0 && dc === 0) continue;
-              const nr = r + dr;
-              const nc = c + dc;
-              if (nr < 0 || nr >= SIZE || nc < 0 || nc >= SIZE) continue;
-              const nKey = cellKey(nr, nc);
-              if (!toClear.has(nKey)) {
-                toClear.add(nKey);
-                expanded = true;
-              }
-            }
-          }
-        }
-      }
+      // Any bomb caught in the clear detonates its 3x3 neighborhood, which can
+      // chain into further bombs reached by the blast.
+      const { bombOrigins, blastCells, processedBombs } = expandBombChain(toClear);
       // A blast reaching a cell that was about to spawn a special gem destroys it instead.
       for (const key of toClear) spawnMap.delete(key);
 
@@ -615,29 +789,40 @@
         const tile = grid[r][c];
         if (!tile) continue;
         removed.push(tile);
-        setScale(tile, 0);
         grid[r][c] = null;
       }
 
-      for (const key of spawnMap.keys()) {
+      for (const origin of bombOrigins) {
+        const p = cellCenterPx(origin.r, origin.c);
+        spawnShockwave(p.x, p.y, { size: CELL * 3.2, durationMs: 550 });
+      }
+      for (const tile of removed) {
+        if (blastCells.has(cellKey(tile.r, tile.c))) explodeTile(tile);
+        else setScale(tile, 0);
+      }
+
+      for (const [key, type] of spawnMap) {
         const { r, c } = parseCellKey(key);
         const tile = grid[r][c];
-        if (tile) markSpecial(tile);
+        if (tile) markSpecial(tile, type);
       }
 
       const bombBonus = processedBombs.size * 50;
       const gained = toClear.size * 10 * chain + bombBonus;
       score += gained;
       scoreEl.textContent = score;
+      const spawnedTypes = [...spawnMap.values()];
       if (processedBombs.size > 0) {
         messageEl.textContent = `Boom! +${gained}`;
-      } else if (spawnMap.size > 0) {
+      } else if (spawnedTypes.includes('wildcard')) {
+        messageEl.textContent = `Wildcard gem created! +${gained}`;
+      } else if (spawnedTypes.length > 0) {
         messageEl.textContent = `Special gem created! +${gained}`;
       } else {
         messageEl.textContent = chain > 1 ? `Combo x${chain}! +${gained}` : `Match! +${gained}`;
       }
 
-      await sleep(MATCH_MS);
+      await sleep(processedBombs.size > 0 ? EXPLODE_MS : MATCH_MS);
       for (const tile of removed) tile.el.remove();
 
       applyGravityAnimated();
