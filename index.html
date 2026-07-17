@@ -481,9 +481,6 @@
     swap() {
       playTone({ freq: 380, freqEnd: 520, duration: 0.09, type: 'sine', gain: 0.1 });
     },
-    invalid() {
-      playTone({ freq: 180, freqEnd: 110, duration: 0.16, type: 'square', gain: 0.09 });
-    },
     match(chain) {
       playTone({ freq: 500 + Math.min(chain, 6) * 50, freqEnd: 800, duration: 0.16, type: 'triangle', gain: 0.15 });
     },
@@ -640,14 +637,14 @@
           const tmp = clone[r][c];
           clone[r][c] = clone[r][c + 1];
           clone[r][c + 1] = tmp;
-          if (findMatches(clone).length > 0) return true;
+          if (findMatches(clone).length > 0 || find2x2Blocks(clone).length > 0) return true;
         }
         if (r < SIZE - 1) {
           const clone = g.map(row => row.slice());
           const tmp = clone[r][c];
           clone[r][c] = clone[r + 1][c];
           clone[r + 1][c] = tmp;
-          if (findMatches(clone).length > 0) return true;
+          if (findMatches(clone).length > 0 || find2x2Blocks(clone).length > 0) return true;
         }
       }
     }
@@ -1048,7 +1045,6 @@
   function flashInvalid(elA, elB) {
     elA.classList.add('invalid');
     elB.classList.add('invalid');
-    sfx.invalid();
     setTimeout(() => {
       elA.classList.remove('invalid');
       elB.classList.remove('invalid');
@@ -1064,9 +1060,15 @@
     return { r, c };
   }
 
+  // True if cell is part of a line-run match OR a 2x2 same-color quad block —
+  // the two independent match shapes the game recognizes.
+  function cellInMatches(g, cell) {
+    if (findMatches(g).some(m => m.r === cell.r && m.c === cell.c)) return true;
+    return find2x2Blocks(g).some(block => block.some(c => c.r === cell.r && c.c === cell.c));
+  }
+
   function cellIsMatched(cell) {
-    const matches = findMatches(snapshotGrid());
-    return matches.some(m => m.r === cell.r && m.c === cell.c);
+    return cellInMatches(snapshotGrid(), cell);
   }
 
   // Would swapping a and b back to their pre-swap positions complete a match
@@ -1078,8 +1080,7 @@
     const tmp = g[a.r][a.c];
     g[a.r][a.c] = g[b.r][b.c];
     g[b.r][b.c] = tmp;
-    const matches = findMatches(g);
-    return matches.some(m => (m.r === a.r && m.c === a.c) || (m.r === b.r && m.c === b.c));
+    return cellInMatches(g, a) || cellInMatches(g, b);
   }
 
   // The run(s) of 3+ currently passing through a cell.
