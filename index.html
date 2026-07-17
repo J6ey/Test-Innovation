@@ -288,7 +288,7 @@
   let best = Number(localStorage.getItem('bejeweled-best') || 0);
   let selected = null;
   let nextId = 0;
-  let pointerState = null;
+  const pointerStates = new Map();
   // Multiple swaps can be in flight at once (each tile only blocks itself via
   // tile.busy). Once a swap is confirmed as a match it's handed to this queue
   // so the actual clear+gravity animations never run concurrently and stomp
@@ -584,14 +584,15 @@
   function onPointerDown(e) {
     const tile = e.currentTarget._tile;
     if (tile.busy) return;
-    pointerState = {
-      pointerId: e.pointerId,
+    // Keyed by pointerId so multiple fingers (or overlapping gestures) can each
+    // be mid-swipe at the same time without clobbering each other's tracking.
+    pointerStates.set(e.pointerId, {
       r: tile.r,
       c: tile.c,
       startX: e.clientX,
       startY: e.clientY,
       moved: false,
-    };
+    });
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
     } catch (err) {
@@ -600,21 +601,22 @@
   }
 
   function onPointerMove(e) {
-    if (!pointerState || pointerState.pointerId !== e.pointerId || pointerState.moved) return;
-    const dx = e.clientX - pointerState.startX;
-    const dy = e.clientY - pointerState.startY;
+    const state = pointerStates.get(e.pointerId);
+    if (!state || state.moved) return;
+    const dx = e.clientX - state.startX;
+    const dy = e.clientY - state.startY;
     if (Math.abs(dx) < SWIPE_THRESHOLD && Math.abs(dy) < SWIPE_THRESHOLD) return;
 
-    pointerState.moved = true;
-    let targetR = pointerState.r;
-    let targetC = pointerState.c;
+    state.moved = true;
+    let targetR = state.r;
+    let targetC = state.c;
     if (Math.abs(dx) > Math.abs(dy)) {
       targetC += dx > 0 ? 1 : -1;
     } else {
       targetR += dy > 0 ? 1 : -1;
     }
 
-    const from = { r: pointerState.r, c: pointerState.c };
+    const from = { r: state.r, c: state.c };
     clearSelection();
     if (targetR >= 0 && targetR < SIZE && targetC >= 0 && targetC < SIZE) {
       attemptSwap(from, { r: targetR, c: targetC });
@@ -622,17 +624,14 @@
   }
 
   function onPointerUp(e) {
-    if (!pointerState || pointerState.pointerId !== e.pointerId) {
-      pointerState = null;
-      return;
-    }
-    const { r, c, moved } = pointerState;
-    pointerState = null;
-    if (!moved) handleTap(r, c);
+    const state = pointerStates.get(e.pointerId);
+    pointerStates.delete(e.pointerId);
+    if (!state) return;
+    if (!state.moved) handleTap(state.r, state.c);
   }
 
-  function onPointerCancel() {
-    pointerState = null;
+  function onPointerCancel(e) {
+    pointerStates.delete(e.pointerId);
   }
 
   // ---- swap / match / gravity ----
