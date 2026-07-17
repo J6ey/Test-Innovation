@@ -1332,9 +1332,16 @@
       for (let i = 0; i < missing; i++) {
         const targetR = i;
         const startR = i - missing;
+        // createTile already places the tile instantly (with a forced reflow),
+        // so the starting frame is already committed — animating to its final
+        // row can happen synchronously right here. This used to be deferred via
+        // requestAnimationFrame, but that callback can be delayed or dropped
+        // (a backgrounded tab, heavy concurrent activity from other swipes),
+        // silently leaving the tile stuck off-board while the grid thinks the
+        // cell is filled.
         const tile = createTile(startR, c, randomGem());
         grid[targetR][c] = tile;
-        requestAnimationFrame(() => setPos(tile, targetR, c));
+        setPos(tile, targetR, c);
       }
     }
   }
