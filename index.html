@@ -224,6 +224,32 @@
   button:active {
     transform: translateY(1px);
   }
+
+  #settings {
+    margin-top: 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
+
+  #settings label {
+    font-size: 0.8rem;
+    opacity: 0.75;
+    letter-spacing: 0.3px;
+  }
+
+  #settings label span {
+    opacity: 1;
+    font-weight: bold;
+    color: #ffd700;
+  }
+
+  #settings input[type="range"] {
+    width: 220px;
+    accent-color: #ff6ec7;
+    cursor: pointer;
+  }
 </style>
 </head>
 <body>
@@ -253,6 +279,11 @@
     <button id="shuffle">Shuffle</button>
   </div>
 
+  <div id="settings">
+    <label for="swapSpeed">Swap delay: <span id="swapSpeedValue">280ms</span></label>
+    <input type="range" id="swapSpeed" min="100" max="900" step="10" value="280">
+  </div>
+
 <script>
 (function () {
   const SIZE = 8;
@@ -260,7 +291,7 @@
   const TILE = 60;
   const GAP = 6;
   const CELL = TILE + GAP;
-  const SWAP_MS = 280;
+  let SWAP_MS = 280;
   const MATCH_MS = 300;
   const EXPLODE_MS = 500;
   const FALL_MS = 320;
@@ -275,9 +306,16 @@
   const messageEl = document.getElementById('message');
   const restartBtn = document.getElementById('restart');
   const shuffleBtn = document.getElementById('shuffle');
+  const swapSpeedInput = document.getElementById('swapSpeed');
+  const swapSpeedValue = document.getElementById('swapSpeedValue');
 
-  board.style.width = (SIZE * TILE + (SIZE - 1) * GAP) + 'px';
-  board.style.height = (SIZE * TILE + (SIZE - 1) * GAP) + 'px';
+  // box-sizing: border-box means #board's own padding eats into the size we
+  // set here, so the board box must also account for that padding (2x GAP) on
+  // top of the space the tiles themselves need — otherwise the last row/column
+  // is clipped by the board's overflow:hidden.
+  const boardSize = SIZE * TILE + (SIZE + 1) * GAP;
+  board.style.width = boardSize + 'px';
+  board.style.height = boardSize + 'px';
 
   const GRACE_MS = 650;
   const GRACE_POLL_MS = 50;
@@ -636,11 +674,17 @@
 
   // ---- swap / match / gravity ----
 
+  // The swap animation gets an explicit duration (tied to the adjustable
+  // SWAP_MS) instead of the CSS default, so the slider only affects swaps —
+  // gravity falls and match fades keep their own fixed timing. Callers reset
+  // transitionDuration back to '' once the swap-specific animation is done.
   function doSwap(a, b) {
     const tileA = grid[a.r][a.c];
     const tileB = grid[b.r][b.c];
     grid[a.r][a.c] = tileB;
     grid[b.r][b.c] = tileA;
+    tileA.el.style.transitionDuration = SWAP_MS + 'ms';
+    tileB.el.style.transitionDuration = SWAP_MS + 'ms';
     setPos(tileB, a.r, a.c);
     setPos(tileA, b.r, b.c);
   }
@@ -719,6 +763,8 @@
     elB.classList.add('pending');
     doSwap(a, b);
     await sleep(SWAP_MS);
+    elA.style.transitionDuration = '';
+    elB.style.transitionDuration = '';
 
     // A wildcard always activates on swipe, regardless of whether it forms a match.
     const wildcardTile = tileA.special === 'wildcard' ? tileA : (tileB.special === 'wildcard' ? tileB : null);
@@ -755,6 +801,8 @@
     flashInvalid(elA, elB);
     if (grid[a.r][a.c] && grid[b.r][b.c]) doSwap(a, b);
     await sleep(SWAP_MS);
+    elA.style.transitionDuration = '';
+    elB.style.transitionDuration = '';
 
     if (cellIsMatched(a) || cellIsMatched(b)) {
       enqueueResolution(async () => {
@@ -979,6 +1027,11 @@
     resolveQueue = [];
     buildBoardFromLayout(genLayout());
     messageEl.textContent = 'Board shuffled!';
+  });
+
+  swapSpeedInput.addEventListener('input', () => {
+    SWAP_MS = Number(swapSpeedInput.value);
+    swapSpeedValue.textContent = SWAP_MS + 'ms';
   });
 
   newGame();
