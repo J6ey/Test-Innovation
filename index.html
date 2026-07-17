@@ -944,26 +944,47 @@
   // new special being created. skipIds lets a caller (e.g. a direct
   // special+special swap combo) mark tiles it has already handled itself so
   // they aren't redundantly re-triggered here.
-  function expandSpecialChain(toClear, skipIds) {
+  //
+  // pendingSpecials (cellKey -> type) covers cells that are ABOUT TO become a
+  // new special gem this same resolveMatches pass — tile.special isn't set on
+  // them yet (markSpecial only runs later, once the converge animation
+  // finishes), so without this they'd look like plain matched cells to a
+  // blast reaching them. reached tracks every cell a blast has hit for
+  // scanning purposes, while toClear only accumulates cells that should
+  // actually be removed from the grid: a pending-special cell is scanned (so
+  // it still chain-triggers its own ability) but deliberately kept OUT of
+  // toClear, so it survives to become the special instead of vanishing.
+  function expandSpecialChain(toClear, skipIds, pendingSpecials) {
+    const pending = pendingSpecials || new Map();
     const bombOrigins = [];
     const quadOrigins = [];
     const crossOrigins = [];
     const wildcardOrigins = [];
     const blastCells = new Set();
     const processedSpecials = new Set(skipIds || []);
-    let expanded = true;
-    while (expanded) {
-      expanded = false;
-      for (const key of [...toClear]) {
+    const reached = new Set(toClear);
+
+    function markReached(key) {
+      reached.add(key);
+      if (!pending.has(key)) toClear.add(key);
+    }
+
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const key of [...reached]) {
         const { r, c } = parseCellKey(key);
         const tile = grid[r][c];
-        if (!tile || !tile.special || processedSpecials.has(tile.id)) continue;
+        if (!tile || processedSpecials.has(tile.id)) continue;
+        const type = tile.special || pending.get(key);
+        if (!type) continue;
+        processedSpecials.add(tile.id);
+        blastCells.add(key);
+        changed = true;
 
-        if (tile.special === 'bomb' || tile.special === 'quad') {
-          processedSpecials.add(tile.id);
-          const radius = tile.special === 'quad' ? 2 : 1;
-          (tile.special === 'quad' ? quadOrigins : bombOrigins).push({ r, c });
-          blastCells.add(key);
+        if (type === 'bomb' || type === 'quad') {
+          const radius = type === 'quad' ? 2 : 1;
+          (type === 'quad' ? quadOrigins : bombOrigins).push({ r, c });
           for (let dr = -radius; dr <= radius; dr++) {
             for (let dc = -radius; dc <= radius; dc++) {
               if (dr === 0 && dc === 0) continue;
@@ -971,48 +992,32 @@
               const nc = c + dc;
               if (nr < 0 || nr >= SIZE || nc < 0 || nc >= SIZE) continue;
               const nKey = cellKey(nr, nc);
+              markReached(nKey);
               blastCells.add(nKey);
-              if (!toClear.has(nKey)) {
-                toClear.add(nKey);
-                expanded = true;
-              }
             }
           }
-        } else if (tile.special === 'cross') {
-          processedSpecials.add(tile.id);
+        } else if (type === 'cross') {
           crossOrigins.push({ r, c });
-          blastCells.add(key);
           for (let cc = 0; cc < SIZE; cc++) {
             const nKey = cellKey(r, cc);
+            markReached(nKey);
             blastCells.add(nKey);
-            if (!toClear.has(nKey)) {
-              toClear.add(nKey);
-              expanded = true;
-            }
           }
           for (let rr = 0; rr < SIZE; rr++) {
             const nKey = cellKey(rr, c);
+            markReached(nKey);
             blastCells.add(nKey);
-            if (!toClear.has(nKey)) {
-              toClear.add(nKey);
-              expanded = true;
-            }
           }
-        } else if (tile.special === 'wildcard') {
-          processedSpecials.add(tile.id);
+        } else if (type === 'wildcard') {
           wildcardOrigins.push({ r, c });
-          blastCells.add(key);
           const targetColor = tile.gem;
           for (let rr = 0; rr < SIZE; rr++) {
             for (let cc = 0; cc < SIZE; cc++) {
               const t = grid[rr][cc];
               if (!t || t.gem !== targetColor) continue;
               const nKey = cellKey(rr, cc);
+              markReached(nKey);
               blastCells.add(nKey);
-              if (!toClear.has(nKey)) {
-                toClear.add(nKey);
-                expanded = true;
-              }
             }
           }
         }
@@ -1723,14 +1728,12 @@
       // color — which can chain into further specials the blast reaches. This
       // is also how a raw special swept into a bigger forming match still gets
       // to trigger its own effect even as another cell in that match survives
-      // as the newly created special gem.
-      const { bombOrigins, quadOrigins, crossOrigins, wildcardOrigins, blastCells } = expandSpecialChain(toClear);
-      // A blast reaching a cell that was about to spawn a special gem destroys it
-      // instead — anything that was converging toward it just fades normally.
-      for (const key of toClear) spawnMap.delete(key);
-      for (const [key, target] of [...convergeTarget]) {
-        if (!spawnMap.has(cellKey(target.r, target.c))) convergeTarget.delete(key);
-      }
+      // as the newly created special gem. spawnMap is passed as pendingSpecials
+      // so a blast reaching a cell that's about to spawn a NEW special this
+      // same pass makes that special chain-trigger too instead of just
+      // destroying it before it ever gets to exist.
+      const { bombOrigins, quadOrigins, crossOrigins, wildcardOrigins, blastCells } =
+        expandSpecialChain(toClear, undefined, spawnMap);
 
       const removed = [];
       for (const key of toClear) {
