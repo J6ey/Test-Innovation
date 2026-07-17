@@ -238,6 +238,27 @@
     100% { transform: scaleY(1); opacity: 0; }
   }
 
+  .laser-beam {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 4px;
+    transform-origin: 0 50%;
+    background: linear-gradient(90deg, #ffffff, #8dffe0 30%, #40f0ff 60%, #ff5fd0 90%, transparent);
+    box-shadow: 0 0 16px 4px rgba(130,240,255,0.85);
+    border-radius: 3px;
+    pointer-events: none;
+    z-index: 6;
+    animation: laserFlash 0.26s ease-out forwards;
+  }
+
+  @keyframes laserFlash {
+    0% { opacity: 0; }
+    15% { opacity: 1; }
+    70% { opacity: 0.9; }
+    100% { opacity: 0; }
+  }
+
   .tile.zapped {
     animation: zapFlash 0.3s ease;
   }
@@ -559,13 +580,15 @@
       playNoise({ duration: 0.15, gain: 0.06, filterFreq: 4000, delay: 0.03 });
     },
     createWildcard() {
-      // A cosmic swell: a deep rising rumble under a bright ascending sweep,
-      // with high shimmering sparkle layered on top.
-      playTone({ freq: 90, freqEnd: 260, duration: 0.5, type: 'sine', gain: 0.2 });
-      playTone({ freq: 260, freqEnd: 1100, duration: 0.55, type: 'sawtooth', gain: 0.1, delay: 0.02 });
-      playTone({ freq: 1400, freqEnd: 2600, duration: 0.35, type: 'sine', gain: 0.07, delay: 0.15 });
-      playTone({ freq: 2000, freqEnd: 3400, duration: 0.3, type: 'triangle', gain: 0.05, delay: 0.25 });
-      playNoise({ duration: 0.4, gain: 0.06, filterFreq: 6000, delay: 0.1 });
+      // A laser charge-up sweep detonating into a deep atomic pulse, with a
+      // shimmering electronic arpeggio riding on top — powerful and
+      // otherworldly rather than a simple chime.
+      playTone({ freq: 200, freqEnd: 3400, duration: 0.2, type: 'sawtooth', gain: 0.15 });
+      playTone({ freq: 60, freqEnd: 20, duration: 0.5, type: 'sine', gain: 0.3, delay: 0.18 });
+      playNoise({ duration: 0.4, gain: 0.12, filterFreq: 3000, filterType: 'bandpass', Q: 4, delay: 0.18 });
+      playTone({ freq: 1200, freqEnd: 2400, duration: 0.12, type: 'square', gain: 0.08, delay: 0.24 });
+      playTone({ freq: 1800, freqEnd: 3000, duration: 0.1, type: 'square', gain: 0.07, delay: 0.32 });
+      playTone({ freq: 2600, freqEnd: 3800, duration: 0.09, type: 'square', gain: 0.06, delay: 0.4 });
     },
     createQuad() {
       playTone({ freq: 260, freqEnd: 720, duration: 0.3, type: 'square', gain: 0.13 });
@@ -597,13 +620,16 @@
       playTone({ freq: 150, freqEnd: 900, duration: 0.32, type: 'sawtooth', gain: 0.18 });
     },
     wildcardZap() {
-      // A cosmic blast: a deep sub-bass boom, a rising energy sweep, shimmering
-      // starburst noise, and a high sparkle trail.
-      playTone({ freq: 55, freqEnd: 30, duration: 0.4, type: 'sine', gain: 0.28 });
-      playTone({ freq: 180, freqEnd: 1800, duration: 0.55, type: 'sawtooth', gain: 0.16, delay: 0.02 });
-      playTone({ freq: 1200, freqEnd: 2600, duration: 0.4, type: 'sine', gain: 0.09, delay: 0.12 });
-      playNoise({ duration: 0.5, gain: 0.14, filterFreq: 5000, delay: 0.05 });
-      playTone({ freq: 2600, freqEnd: 4200, duration: 0.25, type: 'triangle', gain: 0.05, delay: 0.3 });
+      // A rapid laser sweep descending into a nuclear sub-bass detonation
+      // with a resonant shockwave ring, then a buzzing electronic arpeggio
+      // ripples outward — lasery, nuclear, and electronic all at once.
+      playTone({ freq: 3200, freqEnd: 400, duration: 0.14, type: 'sawtooth', gain: 0.17 });
+      playTone({ freq: 45, freqEnd: 18, duration: 0.55, type: 'sine', gain: 0.32, delay: 0.05 });
+      playNoise({ duration: 0.45, gain: 0.16, filterFreq: 2400, filterType: 'bandpass', Q: 5, delay: 0.06 });
+      playTone({ freq: 900, freqEnd: 1800, duration: 0.08, type: 'square', gain: 0.1, delay: 0.15 });
+      playTone({ freq: 1500, freqEnd: 2600, duration: 0.07, type: 'square', gain: 0.09, delay: 0.22 });
+      playTone({ freq: 2100, freqEnd: 3200, duration: 0.06, type: 'square', gain: 0.08, delay: 0.29 });
+      playTone({ freq: 2700, freqEnd: 3800, duration: 0.06, type: 'square', gain: 0.07, delay: 0.36 });
     },
     megaCombo() {
       playTone({ freq: 220, freqEnd: 1700, duration: 0.55, type: 'sawtooth', gain: 0.16 });
@@ -803,12 +829,16 @@
   }
 
   // type: 'bomb' (4-match, blasts a 3x3 area when cleared), 'wildcard'
-  // (5-in-a-line, zaps every gem of a color when swiped), or 'cross' (L/T/+
-  // shaped match, clears its whole row+column when cleared).
+  // (5-in-a-line, zaps every gem of a color when swiped), 'cross' (L/T/+
+  // shaped match, clears its whole row+column when cleared), or 'quad' (2x2
+  // block, blasts a 5x5 area). Also used to re-mark an already-special tile
+  // to a different type (the wildcard's color-surge upgrade) — in that case
+  // the old type's class/textContent are swapped out first.
   function markSpecial(tile, type) {
+    if (tile.special && tile.special !== type) tile.el.classList.remove(tile.special);
     tile.special = type;
     tile.el.classList.add('special', type);
-    if (type === 'wildcard') tile.el.textContent = '🌟';
+    tile.el.textContent = type === 'wildcard' ? '🌟' : GEMS[tile.gem];
     tile.el.style.transitionDuration = '';
     tile.el.style.transform = `translate(${tile.c * CELL}px, ${tile.r * CELL}px) scale(1.4)`;
     setTimeout(() => {
@@ -836,6 +866,24 @@
     tile.el.style.transitionTimingFunction = 'cubic-bezier(0.4, 0, 0.7, 1)';
     tile.el.style.transform = `translate(${x}px, ${y}px) scale(0.15)`;
     tile.el.style.opacity = '0';
+  }
+
+  // A thin laser bolt fired from one cell's center to another's, used by the
+  // wildcard's activation (both the color-zap and the color-surge upgrade)
+  // to visually "target" each gem it reaches.
+  function spawnLaserBeam(fromPx, toPx) {
+    const dx = toPx.x - fromPx.x;
+    const dy = toPx.y - fromPx.y;
+    const length = Math.hypot(dx, dy);
+    const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+    const beam = document.createElement('div');
+    beam.className = 'laser-beam';
+    beam.style.left = fromPx.x + 'px';
+    beam.style.top = fromPx.y + 'px';
+    beam.style.width = length + 'px';
+    beam.style.transform = `rotate(${angle}deg)`;
+    board.appendChild(beam);
+    beam.addEventListener('animationend', () => beam.remove());
   }
 
   // Two beams sweeping the full row and column a cross gem is on.
@@ -1273,8 +1321,17 @@
     elB.style.transitionDuration = '';
 
     // Swapping two special gems directly into each other combines both their
-    // abilities into one bigger effect, instead of just triggering one of them.
-    if (tileA.special && tileB.special) {
+    // abilities into one bigger effect, instead of just triggering one of
+    // them — EXCEPT when exactly one of the two is a wildcard, which instead
+    // falls through to the wildcard-activation branch below: swapping a
+    // special gem into a wildcard promotes every gem of that color to the
+    // swapped-in gem's special grade (see triggerWildcardUpgrade), a more
+    // specific interaction than the generic combo. Two wildcards together
+    // still take the generic combo path (the whole-board wipe).
+    const wcA = tileA.special === 'wildcard';
+    const wcB = tileB.special === 'wildcard';
+    const exactlyOneWildcard = (wcA || wcB) && !(wcA && wcB);
+    if (tileA.special && tileB.special && !exactlyOneWildcard) {
       elA.classList.remove('pending');
       elB.classList.remove('pending');
       enqueueResolution(async () => {
@@ -1351,8 +1408,15 @@
   }
 
   // Clears every gem matching otherTile's color (plus the wildcard itself), with
-  // a rainbow shockwave and a color-zap that ripples outward from the wildcard.
+  // a rainbow shockwave and a laser-zap that ripples outward from the wildcard.
+  // If otherTile is itself a special gem, this instead promotes every gem of
+  // that color to the same special grade (see triggerWildcardUpgrade).
   async function triggerWildcard(wildcardTile, otherTile) {
+    if (otherTile.special) {
+      await triggerWildcardUpgrade(wildcardTile, otherTile);
+      return;
+    }
+
     const targetColor = otherTile.gem;
     const origin = { r: wildcardTile.r, c: wildcardTile.c };
 
@@ -1389,11 +1453,14 @@
 
     let maxDelay = 0;
     for (const tile of removed) {
+      const isOrigin = tile.id === wildcardTile.id;
       const dist = Math.hypot(tile.r - origin.r, tile.c - origin.c);
       const delay = dist * WILDCARD_STAGGER_MS;
       maxDelay = Math.max(maxDelay, delay);
       const key = cellKey(tile.r, tile.c);
+      const targetPx = cellCenterPx(tile.r, tile.c);
       setTimeout(() => {
+        if (!isOrigin) spawnLaserBeam(originPx, targetPx);
         tile.el.classList.add('zapped');
         if (blastCells.has(key)) explodeTile(tile);
         else setScale(tile, 0);
@@ -1432,6 +1499,59 @@
     const fadeMs = (bombOrigins.length > 0 || crossOrigins.length > 0 || quadOrigins.length > 0) ? EXPLODE_MS : WILDCARD_FADE_MS;
     await sleep(maxDelay + fadeMs);
     for (const tile of removed) tile.el.remove();
+
+    applyGravityAnimated();
+    await sleep(FALL_MS);
+  }
+
+  // Swapping a SPECIAL gem into the wildcard (instead of a plain color gem)
+  // doesn't clear the board — it promotes every other gem of that color to
+  // the same special grade, arming the whole board with that ability. The
+  // wildcard itself is consumed; otherTile stays put (it's already the grade
+  // everything else is being promoted to).
+  async function triggerWildcardUpgrade(wildcardTile, otherTile) {
+    const targetColor = otherTile.gem;
+    const targetType = otherTile.special;
+    const origin = { r: wildcardTile.r, c: wildcardTile.c };
+    const wildcardEl = wildcardTile.el;
+
+    grid[origin.r][origin.c] = null;
+
+    const upgraded = [];
+    for (let r = 0; r < SIZE; r++) {
+      for (let c = 0; c < SIZE; c++) {
+        const t = grid[r][c];
+        if (t && t.gem === targetColor && t.special !== targetType) upgraded.push(t);
+      }
+    }
+
+    const originPx = cellCenterPx(origin.r, origin.c);
+    spawnShockwave(originPx.x, originPx.y, {
+      size: SIZE * CELL * 1.6,
+      variant: 'combo',
+      durationMs: 700,
+    });
+
+    let maxDelay = 0;
+    for (const tile of upgraded) {
+      const dist = Math.hypot(tile.r - origin.r, tile.c - origin.c);
+      const delay = dist * WILDCARD_STAGGER_MS;
+      maxDelay = Math.max(maxDelay, delay);
+      const targetPx = cellCenterPx(tile.r, tile.c);
+      setTimeout(() => {
+        spawnLaserBeam(originPx, targetPx);
+        markSpecial(tile, targetType);
+      }, delay);
+    }
+
+    const gained = upgraded.length * 25 + 200;
+    score += gained;
+    scoreEl.textContent = score;
+    messageEl.textContent = `Color surge! All ${GEMS[targetColor]} became ${targetType} gems! +${gained}`;
+    sfx.wildcardZap();
+
+    await sleep(maxDelay + 300);
+    wildcardEl.remove();
 
     applyGravityAnimated();
     await sleep(FALL_MS);
