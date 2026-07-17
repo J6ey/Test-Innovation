@@ -490,12 +490,20 @@
       playTone({ freq: 520, freqEnd: 900, duration: 0.2, type: 'sine', gain: 0.1, delay: 0.03 });
     },
     createCross() {
-      playTone({ freq: 420, freqEnd: 1300, duration: 0.26, type: 'triangle', gain: 0.13 });
-      playNoise({ duration: 0.2, gain: 0.08, filterFreq: 3200, delay: 0.02 });
+      // A quick rising three-note chime, like the gem is charging up with energy.
+      playTone({ freq: 500, freqEnd: 900, duration: 0.12, type: 'triangle', gain: 0.12 });
+      playTone({ freq: 750, freqEnd: 1500, duration: 0.14, type: 'triangle', gain: 0.1, delay: 0.07 });
+      playTone({ freq: 1100, freqEnd: 2000, duration: 0.18, type: 'sine', gain: 0.08, delay: 0.14 });
+      playNoise({ duration: 0.15, gain: 0.06, filterFreq: 4000, delay: 0.03 });
     },
     createWildcard() {
-      playTone({ freq: 300, freqEnd: 1500, duration: 0.42, type: 'sawtooth', gain: 0.13 });
-      playTone({ freq: 900, freqEnd: 1900, duration: 0.3, type: 'sine', gain: 0.08, delay: 0.08 });
+      // A cosmic swell: a deep rising rumble under a bright ascending sweep,
+      // with high shimmering sparkle layered on top.
+      playTone({ freq: 90, freqEnd: 260, duration: 0.5, type: 'sine', gain: 0.2 });
+      playTone({ freq: 260, freqEnd: 1100, duration: 0.55, type: 'sawtooth', gain: 0.1, delay: 0.02 });
+      playTone({ freq: 1400, freqEnd: 2600, duration: 0.35, type: 'sine', gain: 0.07, delay: 0.15 });
+      playTone({ freq: 2000, freqEnd: 3400, duration: 0.3, type: 'triangle', gain: 0.05, delay: 0.25 });
+      playNoise({ duration: 0.4, gain: 0.06, filterFreq: 6000, delay: 0.1 });
     },
     createQuad() {
       playTone({ freq: 260, freqEnd: 720, duration: 0.3, type: 'square', gain: 0.13 });
@@ -507,16 +515,27 @@
       playTone({ freq: 110, freqEnd: 35, duration: 0.35, type: 'sine', gain: 0.22 });
     },
     cross() {
-      playNoise({ duration: 0.4, gain: 0.2, filterFreq: 2600 });
-      playTone({ freq: 700, freqEnd: 1600, duration: 0.4, type: 'sine', gain: 0.12 });
+      // Electric arc: a few rapid stepped-pitch flickers plus a sharp crackle,
+      // followed by a low thunder rumble tail.
+      playTone({ freq: 1800, freqEnd: 400, duration: 0.05, type: 'square', gain: 0.14 });
+      playTone({ freq: 2600, freqEnd: 600, duration: 0.04, type: 'square', gain: 0.12, delay: 0.05 });
+      playTone({ freq: 2000, freqEnd: 300, duration: 0.06, type: 'square', gain: 0.13, delay: 0.1 });
+      playNoise({ duration: 0.12, gain: 0.22, filterFreq: 7000 });
+      playNoise({ duration: 0.35, gain: 0.18, filterFreq: 900, delay: 0.08 });
+      playTone({ freq: 90, freqEnd: 40, duration: 0.35, type: 'sine', gain: 0.15, delay: 0.1 });
     },
     quad() {
       playNoise({ duration: 0.32, gain: 0.24, filterFreq: 1400 });
       playTone({ freq: 150, freqEnd: 900, duration: 0.32, type: 'sawtooth', gain: 0.18 });
     },
     wildcardZap() {
-      playTone({ freq: 220, freqEnd: 1300, duration: 0.5, type: 'sawtooth', gain: 0.14 });
-      playNoise({ duration: 0.3, gain: 0.1, filterFreq: 3500, delay: 0.05 });
+      // A cosmic blast: a deep sub-bass boom, a rising energy sweep, shimmering
+      // starburst noise, and a high sparkle trail.
+      playTone({ freq: 55, freqEnd: 30, duration: 0.4, type: 'sine', gain: 0.28 });
+      playTone({ freq: 180, freqEnd: 1800, duration: 0.55, type: 'sawtooth', gain: 0.16, delay: 0.02 });
+      playTone({ freq: 1200, freqEnd: 2600, duration: 0.4, type: 'sine', gain: 0.09, delay: 0.12 });
+      playNoise({ duration: 0.5, gain: 0.14, filterFreq: 5000, delay: 0.05 });
+      playTone({ freq: 2600, freqEnd: 4200, duration: 0.25, type: 'triangle', gain: 0.05, delay: 0.3 });
     },
     megaCombo() {
       playTone({ freq: 220, freqEnd: 1700, duration: 0.55, type: 'sawtooth', gain: 0.16 });
