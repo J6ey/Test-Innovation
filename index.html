@@ -325,6 +325,7 @@
   <div id="controls">
     <button id="restart">New Game</button>
     <button id="shuffle">Shuffle</button>
+    <button id="muteBtn" aria-label="Toggle sound">🔊</button>
   </div>
 
   <div id="settings">
@@ -357,6 +358,7 @@
   const shuffleBtn = document.getElementById('shuffle');
   const swapSpeedInput = document.getElementById('swapSpeed');
   const swapSpeedValue = document.getElementById('swapSpeedValue');
+  const muteBtn = document.getElementById('muteBtn');
 
   // box-sizing: border-box means #board's own padding eats into the size we
   // set here, so the board box must also account for that padding (2x GAP) on
@@ -392,6 +394,89 @@
   function sleep(ms) {
     return new Promise(res => setTimeout(res, ms));
   }
+
+  // ---- sound (synthesized with Web Audio, no audio files needed) ----
+
+  let soundEnabled = localStorage.getItem('bejeweled-sound') !== 'off';
+  let audioCtx = null;
+
+  function getAudioCtx() {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    if (!audioCtx) audioCtx = new Ctx();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
+  }
+
+  function playTone({ freq, freqEnd, duration, type = 'sine', gain = 0.18, delay = 0 }) {
+    if (!soundEnabled) return;
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    const start = ctx.currentTime + delay;
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, start);
+    if (freqEnd) osc.frequency.exponentialRampToValueAtTime(Math.max(freqEnd, 1), start + duration);
+    g.gain.setValueAtTime(gain, start);
+    g.gain.exponentialRampToValueAtTime(0.001, start + duration);
+    osc.connect(g).connect(ctx.destination);
+    osc.start(start);
+    osc.stop(start + duration + 0.02);
+  }
+
+  function playNoise({ duration, gain = 0.2, delay = 0, filterFreq = 1200 }) {
+    if (!soundEnabled) return;
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    const start = ctx.currentTime + delay;
+    const bufferSize = Math.max(1, Math.floor(ctx.sampleRate * duration));
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+    const noise = ctx.createBufferSource();
+    noise.buffer = buffer;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = filterFreq;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(gain, start);
+    g.gain.exponentialRampToValueAtTime(0.001, start + duration);
+    noise.connect(filter).connect(g).connect(ctx.destination);
+    noise.start(start);
+    noise.stop(start + duration + 0.02);
+  }
+
+  const sfx = {
+    swap() {
+      playTone({ freq: 380, freqEnd: 520, duration: 0.09, type: 'sine', gain: 0.1 });
+    },
+    invalid() {
+      playTone({ freq: 180, freqEnd: 110, duration: 0.16, type: 'square', gain: 0.09 });
+    },
+    match(chain) {
+      playTone({ freq: 500 + Math.min(chain, 6) * 50, freqEnd: 800, duration: 0.16, type: 'triangle', gain: 0.15 });
+    },
+    special() {
+      playTone({ freq: 320, freqEnd: 980, duration: 0.32, type: 'sawtooth', gain: 0.12 });
+      playTone({ freq: 640, freqEnd: 1400, duration: 0.28, type: 'sine', gain: 0.08, delay: 0.05 });
+    },
+    bomb() {
+      playNoise({ duration: 0.35, gain: 0.28, filterFreq: 700 });
+      playTone({ freq: 110, freqEnd: 35, duration: 0.35, type: 'sine', gain: 0.22 });
+    },
+    cross() {
+      playNoise({ duration: 0.4, gain: 0.2, filterFreq: 2600 });
+      playTone({ freq: 700, freqEnd: 1600, duration: 0.4, type: 'sine', gain: 0.12 });
+    },
+    wildcardZap() {
+      playTone({ freq: 220, freqEnd: 1300, duration: 0.5, type: 'sawtooth', gain: 0.14 });
+      playNoise({ duration: 0.3, gain: 0.1, filterFreq: 3500, delay: 0.05 });
+    },
+    reshuffle() {
+      playTone({ freq: 260, freqEnd: 340, duration: 0.22, type: 'sine', gain: 0.1 });
+    },
+  };
 
   // ---- pure matching helpers (operate on plain 2D arrays of gem indices) ----
 
@@ -761,6 +846,7 @@
   }
 
   function onPointerDown(e) {
+    if (soundEnabled) getAudioCtx(); // unlock audio on the earliest possible gesture
     const tile = e.currentTarget._tile;
     if (tile.busy) return;
     // Keyed by pointerId so multiple fingers (or overlapping gestures) can each
@@ -828,11 +914,13 @@
     tileB.el.style.transitionDuration = SWAP_MS + 'ms';
     setPos(tileB, a.r, a.c);
     setPos(tileA, b.r, b.c);
+    sfx.swap();
   }
 
   function flashInvalid(elA, elB) {
     elA.classList.add('invalid');
     elB.classList.add('invalid');
+    sfx.invalid();
     setTimeout(() => {
       elA.classList.remove('invalid');
       elB.classList.remove('invalid');
@@ -851,6 +939,34 @@
   function cellIsMatched(cell) {
     const matches = findMatches(snapshotGrid());
     return matches.some(m => m.r === cell.r && m.c === cell.c);
+  }
+
+  // The run(s) of 3+ currently passing through a cell.
+  function matchRunsAt(cell) {
+    const { runs } = findMatchesDetailed(snapshotGrid());
+    return runs.filter(run => run.some(c => c.r === cell.r && c.c === cell.c));
+  }
+
+  // A match formed by the "quick swap" assist trick can involve OTHER tiles
+  // that are still mid-swipe themselves (an assist gem sliding into the line).
+  // Wait for all of them to finish (no longer tile.busy) before the match is
+  // allowed to combine — otherwise the clear/converge animation can start while
+  // an assist gem is still visibly sliding into place. a/b are excluded since
+  // this swap's own animation is already accounted for by the caller.
+  async function waitForOtherTilesToSettle(a, b) {
+    const isAOrB = cell => (cell.r === a.r && cell.c === a.c) || (cell.r === b.r && cell.c === b.c);
+    let waited = 0;
+    while (waited < GRACE_MS) {
+      const runs = [...matchRunsAt(a), ...matchRunsAt(b)];
+      const stillSettling = runs.some(run => run.some(cell => {
+        if (isAOrB(cell)) return false;
+        const t = grid[cell.r][cell.c];
+        return t && t.busy;
+      }));
+      if (!stillSettling) return;
+      await sleep(GRACE_POLL_MS);
+      waited += GRACE_POLL_MS;
+    }
   }
 
   // Queues the actual clear+gravity resolution so concurrent swaps (which are
@@ -925,6 +1041,9 @@
     }
 
     if (await waitForGraceMatch(a, b)) {
+      // An assist gem forming part of this match may still be sliding into
+      // place — let it finish before the match actually combines.
+      await waitForOtherTilesToSettle(a, b);
       elA.classList.remove('pending');
       elB.classList.remove('pending');
       enqueueResolution(async () => {
@@ -946,6 +1065,7 @@
     elB.style.transitionDuration = '';
 
     if (cellIsMatched(a) || cellIsMatched(b)) {
+      await waitForOtherTilesToSettle(a, b);
       enqueueResolution(async () => {
         moves++;
         movesEl.textContent = moves;
@@ -1017,6 +1137,7 @@
     score += gained;
     scoreEl.textContent = score;
     messageEl.textContent = `Wildcard zap! +${gained}`;
+    sfx.wildcardZap();
 
     const fadeMs = (bombOrigins.length > 0 || crossOrigins.length > 0) ? EXPLODE_MS : WILDCARD_FADE_MS;
     await sleep(maxDelay + fadeMs);
@@ -1140,6 +1261,12 @@
       score += gained;
       scoreEl.textContent = score;
       const spawnedTypes = [...spawnMap.values()];
+      if (crossOrigins.length > 0) sfx.cross();
+      if (bombOrigins.length > 0) sfx.bomb();
+      if (crossOrigins.length === 0 && bombOrigins.length === 0) {
+        if (spawnedTypes.length > 0) sfx.special();
+        else sfx.match(chain);
+      }
       if (crossOrigins.length > 0) {
         messageEl.textContent = `Cross blast! +${gained}`;
       } else if (bombOrigins.length > 0) {
@@ -1166,6 +1293,7 @@
 
     if (chain > 0 && !hasPossibleMove(snapshotGrid())) {
       messageEl.textContent = 'No moves left — reshuffling...';
+      sfx.reshuffle();
       await sleep(500);
       buildBoardFromLayout(genLayout());
     }
@@ -1232,6 +1360,14 @@
   swapSpeedInput.addEventListener('input', () => {
     SWAP_MS = Number(swapSpeedInput.value);
     swapSpeedValue.textContent = SWAP_MS + 'ms';
+  });
+
+  muteBtn.textContent = soundEnabled ? '🔊' : '🔇';
+  muteBtn.addEventListener('click', () => {
+    soundEnabled = !soundEnabled;
+    muteBtn.textContent = soundEnabled ? '🔊' : '🔇';
+    localStorage.setItem('bejeweled-sound', soundEnabled ? 'on' : 'off');
+    if (soundEnabled) getAudioCtx();
   });
 
   newGame();
