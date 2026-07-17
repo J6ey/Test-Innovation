@@ -14,6 +14,10 @@
 
   * { box-sizing: border-box; }
 
+  html, body {
+    overflow-x: hidden;
+  }
+
   body {
     margin: 0;
     min-height: 100vh;
@@ -25,6 +29,10 @@
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     color: #f0eaff;
     padding: 20px;
+  }
+
+  @media (max-width: 480px) {
+    body { padding: 10px; }
   }
 
   h1 {
@@ -277,6 +285,8 @@
   #controls {
     margin-top: 14px;
     display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
     gap: 10px;
   }
 
@@ -322,6 +332,7 @@
 
   #settings input[type="range"] {
     width: 220px;
+    max-width: 80vw;
     accent-color: #ff6ec7;
     cursor: pointer;
   }
@@ -364,9 +375,14 @@
 (function () {
   const SIZE = 8;
   const GEMS = ['🔴', '🟠', '🟡', '🟢', '🔵', '🟣'];
-  const TILE = 60;
-  const GAP = 6;
-  const CELL = TILE + GAP;
+  // Tile/gap/board size shrink to fit narrow (mobile) viewports — see
+  // applyTileMetrics() below, which sets these on load and on resize.
+  const MAX_TILE = 60;
+  const MIN_TILE = 26;
+  let TILE = MAX_TILE;
+  let GAP = 6;
+  let CELL = TILE + GAP;
+  let boardSize = 0;
   let SWAP_MS = 280;
   const MATCH_MS = 300;
   const CONVERGE_MS = 380;
@@ -387,13 +403,50 @@
   const swapSpeedValue = document.getElementById('swapSpeedValue');
   const muteBtn = document.getElementById('muteBtn');
 
+  // Picks the largest tile size (down to MIN_TILE) whose board still fits the
+  // viewport's available width, so the board never overflows a phone screen.
+  function computeTileMetrics() {
+    const bodyStyle = getComputedStyle(document.body);
+    const paddingX = parseFloat(bodyStyle.paddingLeft) + parseFloat(bodyStyle.paddingRight);
+    const available = Math.max(200, document.documentElement.clientWidth - paddingX);
+    let tile = MAX_TILE;
+    let gap = Math.max(3, Math.round(tile * 0.1));
+    while (tile > MIN_TILE && SIZE * tile + (SIZE + 1) * gap > available) {
+      tile--;
+      gap = Math.max(3, Math.round(tile * 0.1));
+    }
+    return { tile, gap };
+  }
+
   // box-sizing: border-box means #board's own padding eats into the size we
   // set here, so the board box must also account for that padding (2x GAP) on
   // top of the space the tiles themselves need — otherwise the last row/column
   // is clipped by the board's overflow:hidden.
-  const boardSize = SIZE * TILE + (SIZE + 1) * GAP;
-  board.style.width = boardSize + 'px';
-  board.style.height = boardSize + 'px';
+  function applyTileMetrics() {
+    const metrics = computeTileMetrics();
+    TILE = metrics.tile;
+    GAP = metrics.gap;
+    CELL = TILE + GAP;
+    boardSize = SIZE * TILE + (SIZE + 1) * GAP;
+    document.documentElement.style.setProperty('--tile-size', TILE + 'px');
+    document.documentElement.style.setProperty('--gap', GAP + 'px');
+    board.style.width = boardSize + 'px';
+    board.style.height = boardSize + 'px';
+    // Snap any existing tiles to their (unchanged) grid cell at the new size —
+    // instant, no transition, so a resize doesn't animate every tile sliding.
+    for (let r = 0; r < SIZE; r++) {
+      for (let c = 0; c < SIZE; c++) {
+        const t = grid[r][c];
+        if (t) setPos(t, r, c, true);
+      }
+    }
+  }
+
+  let resizeTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(applyTileMetrics, 150);
+  });
 
   const GRACE_MS = 650;
   const GRACE_POLL_MS = 50;
@@ -1729,6 +1782,7 @@
     if (soundEnabled) getAudioCtx();
   });
 
+  applyTileMetrics();
   newGame();
 })();
 </script>
