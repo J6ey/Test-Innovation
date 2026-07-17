@@ -170,6 +170,33 @@
     pointer-events: none;
   }
 
+  .tile.special.quad {
+    background: radial-gradient(circle, #ffffff 0%, #d9a6ff 50%, #9b3fd1 100%);
+  }
+
+  .tile.special.quad::after {
+    content: '◆';
+    position: absolute;
+    top: 1px;
+    right: 4px;
+    font-size: 0.85rem;
+    color: #3a0a5c;
+    text-shadow: 0 0 6px rgba(255,255,255,0.9);
+    pointer-events: none;
+  }
+
+  .shockwave.quad {
+    background: radial-gradient(circle, rgba(255,255,255,0.95) 0%, rgba(210,140,255,0.65) 30%, rgba(140,40,200,0.3) 55%, transparent 75%);
+    box-shadow: 0 0 40px 10px rgba(180,90,230,0.55);
+  }
+
+  .shockwave.combo {
+    background: conic-gradient(from 0deg, #ff6ec7, #ffd700, #6ecbff, #7cff6e, #d9a6ff, #ff6ec7);
+    opacity: 0.6;
+    mix-blend-mode: screen;
+    box-shadow: 0 0 80px 20px rgba(255,255,255,0.45);
+  }
+
   .beam {
     position: absolute;
     pointer-events: none;
@@ -302,7 +329,7 @@
 </head>
 <body>
   <h1>💎 BEJEWELED 💎</h1>
-  <div class="subtitle">Match 4 for a blast gem, 5 in a line for a wildcard, or an L/T/+ shape for a cross gem</div>
+  <div class="subtitle">Match 4 for a blast gem, 5 in a line for a wildcard, an L/T/+ shape for a cross gem, or a 2x2 block for a quad gem — swap two specials together for a combo</div>
 
   <div class="hud">
     <div>
@@ -460,10 +487,24 @@
     match(chain) {
       playTone({ freq: 500 + Math.min(chain, 6) * 50, freqEnd: 800, duration: 0.16, type: 'triangle', gain: 0.15 });
     },
-    special() {
-      playTone({ freq: 320, freqEnd: 980, duration: 0.32, type: 'sawtooth', gain: 0.12 });
-      playTone({ freq: 640, freqEnd: 1400, duration: 0.28, type: 'sine', gain: 0.08, delay: 0.05 });
+    // Creation sounds — distinct per special type, evoking the ability it grants.
+    createBomb() {
+      playTone({ freq: 200, freqEnd: 55, duration: 0.24, type: 'square', gain: 0.15 });
+      playTone({ freq: 520, freqEnd: 900, duration: 0.2, type: 'sine', gain: 0.1, delay: 0.03 });
     },
+    createCross() {
+      playTone({ freq: 420, freqEnd: 1300, duration: 0.26, type: 'triangle', gain: 0.13 });
+      playNoise({ duration: 0.2, gain: 0.08, filterFreq: 3200, delay: 0.02 });
+    },
+    createWildcard() {
+      playTone({ freq: 300, freqEnd: 1500, duration: 0.42, type: 'sawtooth', gain: 0.13 });
+      playTone({ freq: 900, freqEnd: 1900, duration: 0.3, type: 'sine', gain: 0.08, delay: 0.08 });
+    },
+    createQuad() {
+      playTone({ freq: 260, freqEnd: 720, duration: 0.3, type: 'square', gain: 0.13 });
+      playTone({ freq: 640, freqEnd: 1150, duration: 0.26, type: 'triangle', gain: 0.1, delay: 0.04 });
+    },
+    // Trigger/detonation sounds — played when a special gem's ability fires.
     bomb() {
       playNoise({ duration: 0.35, gain: 0.28, filterFreq: 700 });
       playTone({ freq: 110, freqEnd: 35, duration: 0.35, type: 'sine', gain: 0.22 });
@@ -472,9 +513,18 @@
       playNoise({ duration: 0.4, gain: 0.2, filterFreq: 2600 });
       playTone({ freq: 700, freqEnd: 1600, duration: 0.4, type: 'sine', gain: 0.12 });
     },
+    quad() {
+      playNoise({ duration: 0.32, gain: 0.24, filterFreq: 1400 });
+      playTone({ freq: 150, freqEnd: 900, duration: 0.32, type: 'sawtooth', gain: 0.18 });
+    },
     wildcardZap() {
       playTone({ freq: 220, freqEnd: 1300, duration: 0.5, type: 'sawtooth', gain: 0.14 });
       playNoise({ duration: 0.3, gain: 0.1, filterFreq: 3500, delay: 0.05 });
+    },
+    megaCombo() {
+      playTone({ freq: 220, freqEnd: 1700, duration: 0.55, type: 'sawtooth', gain: 0.16 });
+      playTone({ freq: 440, freqEnd: 2000, duration: 0.5, type: 'sine', gain: 0.12, delay: 0.05 });
+      playNoise({ duration: 0.45, gain: 0.22, filterFreq: 2200, delay: 0.08 });
     },
     reshuffle() {
       playTone({ freq: 260, freqEnd: 340, duration: 0.22, type: 'sine', gain: 0.1 });
@@ -552,6 +602,22 @@
       }
     }
     return groups;
+  }
+
+  // A 2x2 block of the same color is its own match shape (not reducible to a
+  // 3+ line run) — it spawns a "quad" gem instead.
+  function find2x2Blocks(g) {
+    const blocks = [];
+    for (let r = 0; r < SIZE - 1; r++) {
+      for (let c = 0; c < SIZE - 1; c++) {
+        const v = g[r][c];
+        if (v === null) continue;
+        if (g[r][c + 1] === v && g[r + 1][c] === v && g[r + 1][c + 1] === v) {
+          blocks.push([{ r, c }, { r, c: c + 1 }, { r: r + 1, c }, { r: r + 1, c: c + 1 }]);
+        }
+      }
+    }
+    return blocks;
   }
 
   function dedupeCells(cells) {
@@ -711,7 +777,8 @@
 
   function spawnShockwave(cx, cy, opts) {
     const wave = document.createElement('div');
-    wave.className = 'shockwave' + (opts.rainbow ? ' rainbow' : '');
+    const variant = opts.variant || (opts.rainbow ? 'rainbow' : '');
+    wave.className = 'shockwave' + (variant ? ' ' + variant : '');
     const size = opts.size;
     wave.style.left = cx + 'px';
     wave.style.top = cy + 'px';
@@ -737,13 +804,21 @@
   }
 
   // Expands a set of "r,c" cell keys to include the blast radius of any special
-  // gem caught inside it — a 3x3 area for a bomb, the full row+column for a
-  // cross gem — chaining into further specials the blast reaches.
-  function expandSpecialChain(toClear) {
+  // gem caught inside it — a 3x3 area for a bomb, a 5x5 area for a quad, the
+  // full row+column for a cross gem, or every gem of its own color for a
+  // wildcard — chaining into further specials the blast reaches. This is what
+  // lets a raw special gem incidentally swept up inside a bigger match trigger
+  // its own effect even while another cell in that same run survives as the
+  // new special being created. skipIds lets a caller (e.g. a direct
+  // special+special swap combo) mark tiles it has already handled itself so
+  // they aren't redundantly re-triggered here.
+  function expandSpecialChain(toClear, skipIds) {
     const bombOrigins = [];
+    const quadOrigins = [];
     const crossOrigins = [];
+    const wildcardOrigins = [];
     const blastCells = new Set();
-    const processedSpecials = new Set();
+    const processedSpecials = new Set(skipIds || []);
     let expanded = true;
     while (expanded) {
       expanded = false;
@@ -752,12 +827,13 @@
         const tile = grid[r][c];
         if (!tile || !tile.special || processedSpecials.has(tile.id)) continue;
 
-        if (tile.special === 'bomb') {
+        if (tile.special === 'bomb' || tile.special === 'quad') {
           processedSpecials.add(tile.id);
-          bombOrigins.push({ r, c });
+          const radius = tile.special === 'quad' ? 2 : 1;
+          (tile.special === 'quad' ? quadOrigins : bombOrigins).push({ r, c });
           blastCells.add(key);
-          for (let dr = -1; dr <= 1; dr++) {
-            for (let dc = -1; dc <= 1; dc++) {
+          for (let dr = -radius; dr <= radius; dr++) {
+            for (let dc = -radius; dc <= radius; dc++) {
               if (dr === 0 && dc === 0) continue;
               const nr = r + dr;
               const nc = c + dc;
@@ -790,10 +866,56 @@
               expanded = true;
             }
           }
+        } else if (tile.special === 'wildcard') {
+          processedSpecials.add(tile.id);
+          wildcardOrigins.push({ r, c });
+          blastCells.add(key);
+          const targetColor = tile.gem;
+          for (let rr = 0; rr < SIZE; rr++) {
+            for (let cc = 0; cc < SIZE; cc++) {
+              const t = grid[rr][cc];
+              if (!t || t.gem !== targetColor) continue;
+              const nKey = cellKey(rr, cc);
+              blastCells.add(nKey);
+              if (!toClear.has(nKey)) {
+                toClear.add(nKey);
+                expanded = true;
+              }
+            }
+          }
         }
       }
     }
-    return { bombOrigins, crossOrigins, blastCells, processedSpecials };
+    return { bombOrigins, quadOrigins, crossOrigins, wildcardOrigins, blastCells, processedSpecials };
+  }
+
+  // The set of cells a special gem's own ability would clear, centered on its
+  // current position. Used to combine two specials' effects when they're
+  // swapped directly into each other (see triggerSpecialCombo).
+  function specialAreaCells(tile) {
+    const cells = new Set([cellKey(tile.r, tile.c)]);
+    if (tile.special === 'bomb' || tile.special === 'quad') {
+      const radius = tile.special === 'quad' ? 2 : 1;
+      for (let dr = -radius; dr <= radius; dr++) {
+        for (let dc = -radius; dc <= radius; dc++) {
+          const nr = tile.r + dr;
+          const nc = tile.c + dc;
+          if (nr < 0 || nr >= SIZE || nc < 0 || nc >= SIZE) continue;
+          cells.add(cellKey(nr, nc));
+        }
+      }
+    } else if (tile.special === 'cross') {
+      for (let cc = 0; cc < SIZE; cc++) cells.add(cellKey(tile.r, cc));
+      for (let rr = 0; rr < SIZE; rr++) cells.add(cellKey(rr, tile.c));
+    } else if (tile.special === 'wildcard') {
+      for (let rr = 0; rr < SIZE; rr++) {
+        for (let cc = 0; cc < SIZE; cc++) {
+          const t = grid[rr][cc];
+          if (t && t.gem === tile.gem) cells.add(cellKey(rr, cc));
+        }
+      }
+    }
+    return cells;
   }
 
   function clearBoard() {
@@ -911,7 +1033,7 @@
   // SWAP_MS) instead of the CSS default, so the slider only affects swaps —
   // gravity falls and match fades keep their own fixed timing. Callers reset
   // transitionDuration back to '' once the swap-specific animation is done.
-  function doSwap(a, b) {
+  function doSwap(a, b, opts = {}) {
     const tileA = grid[a.r][a.c];
     const tileB = grid[b.r][b.c];
     grid[a.r][a.c] = tileB;
@@ -920,7 +1042,7 @@
     tileB.el.style.transitionDuration = SWAP_MS + 'ms';
     setPos(tileB, a.r, a.c);
     setPos(tileA, b.r, b.c);
-    sfx.swap();
+    if (!opts.silent) sfx.swap();
   }
 
   function flashInvalid(elA, elB) {
@@ -1062,6 +1184,22 @@
     elA.style.transitionDuration = '';
     elB.style.transitionDuration = '';
 
+    // Swapping two special gems directly into each other combines both their
+    // abilities into one bigger effect, instead of just triggering one of them.
+    if (tileA.special && tileB.special) {
+      elA.classList.remove('pending');
+      elB.classList.remove('pending');
+      enqueueResolution(async () => {
+        moves++;
+        movesEl.textContent = moves;
+        await triggerSpecialCombo(tileA, tileB);
+        await resolveMatches();
+      });
+      tileA.busy = false;
+      tileB.busy = false;
+      return;
+    }
+
     // A wildcard always activates on swipe, regardless of whether it forms a match.
     const wildcardTile = tileA.special === 'wildcard' ? tileA : (tileB.special === 'wildcard' ? tileB : null);
     if (wildcardTile) {
@@ -1102,7 +1240,7 @@
     if (outcome === 'none') flashInvalid(elA, elB);
     tileA.animating = true;
     tileB.animating = true;
-    if (grid[a.r][a.c] && grid[b.r][b.c]) doSwap(a, b);
+    if (grid[a.r][a.c] && grid[b.r][b.c]) doSwap(a, b, { silent: true });
     await sleep(SWAP_MS);
     tileA.animating = false;
     tileB.animating = false;
@@ -1138,7 +1276,12 @@
       }
     }
 
-    const { bombOrigins, crossOrigins, blastCells, processedSpecials } = expandSpecialChain(toClear);
+    // The origin wildcard is already being fully handled here (its own target
+    // color was chosen from otherTile, not its own gem) — skip it so the
+    // generic wildcard branch below doesn't also re-trigger it with its
+    // default (own-color) behavior.
+    const { bombOrigins, quadOrigins, crossOrigins, wildcardOrigins, blastCells } =
+      expandSpecialChain(toClear, new Set([wildcardTile.id]));
 
     const removed = [];
     for (const key of toClear) {
@@ -1173,19 +1316,109 @@
       const dist = Math.hypot(origin2.r - origin.r, origin2.c - origin.c);
       setTimeout(() => spawnShockwave(p.x, p.y, { size: CELL * 3.2, durationMs: 550 }), dist * WILDCARD_STAGGER_MS);
     }
+    for (const origin2 of quadOrigins) {
+      const p = cellCenterPx(origin2.r, origin2.c);
+      const dist = Math.hypot(origin2.r - origin.r, origin2.c - origin.c);
+      setTimeout(() => spawnShockwave(p.x, p.y, { size: CELL * 5.2, variant: 'quad', durationMs: 650 }), dist * WILDCARD_STAGGER_MS);
+    }
     for (const origin2 of crossOrigins) {
       const dist = Math.hypot(origin2.r - origin.r, origin2.c - origin.c);
       setTimeout(() => spawnCrossBeams(origin2), dist * WILDCARD_STAGGER_MS);
     }
+    for (const origin2 of wildcardOrigins) {
+      const p = cellCenterPx(origin2.r, origin2.c);
+      const dist = Math.hypot(origin2.r - origin.r, origin2.c - origin.c);
+      setTimeout(() => spawnShockwave(p.x, p.y, { size: SIZE * CELL * 1.1, rainbow: true, durationMs: 600 }), dist * WILDCARD_STAGGER_MS);
+    }
 
-    const gained = removed.length * 10 + 100 + bombOrigins.length * 50 + crossOrigins.length * 80;
+    const gained = removed.length * 10 + 100 + bombOrigins.length * 50 + crossOrigins.length * 80 +
+      quadOrigins.length * 90 + wildcardOrigins.length * 120;
     score += gained;
     scoreEl.textContent = score;
     messageEl.textContent = `Wildcard zap! +${gained}`;
     sfx.wildcardZap();
+    if (bombOrigins.length > 0) sfx.bomb();
+    if (quadOrigins.length > 0) sfx.quad();
+    if (crossOrigins.length > 0) sfx.cross();
 
-    const fadeMs = (bombOrigins.length > 0 || crossOrigins.length > 0) ? EXPLODE_MS : WILDCARD_FADE_MS;
+    const fadeMs = (bombOrigins.length > 0 || crossOrigins.length > 0 || quadOrigins.length > 0) ? EXPLODE_MS : WILDCARD_FADE_MS;
     await sleep(maxDelay + fadeMs);
+    for (const tile of removed) tile.el.remove();
+
+    applyGravityAnimated();
+    await sleep(FALL_MS);
+  }
+
+  // Swapping two special gems directly into each other combines their
+  // abilities into one bigger, cooler effect instead of just triggering one:
+  // each contributes its own blast area (a bomb's 3x3, a quad's 5x5, a
+  // cross's row+column, a wildcard's whole color) around wherever it ended up
+  // after the swap. Two wildcards together are the ultimate combo — they wipe
+  // the entire board.
+  async function triggerSpecialCombo(tileA, tileB) {
+    const bothWildcard = tileA.special === 'wildcard' && tileB.special === 'wildcard';
+    const originA = { r: tileA.r, c: tileA.c };
+    const originB = { r: tileB.r, c: tileB.c };
+
+    let toClear;
+    if (bothWildcard) {
+      toClear = new Set();
+      for (let r = 0; r < SIZE; r++) {
+        for (let c = 0; c < SIZE; c++) {
+          if (grid[r][c]) toClear.add(cellKey(r, c));
+        }
+      }
+    } else {
+      toClear = new Set([...specialAreaCells(tileA), ...specialAreaCells(tileB)]);
+    }
+
+    const { bombOrigins, quadOrigins, crossOrigins, wildcardOrigins, blastCells } =
+      expandSpecialChain(toClear, new Set([tileA.id, tileB.id]));
+
+    const removed = [];
+    for (const key of toClear) {
+      const { r, c } = parseCellKey(key);
+      const tile = grid[r][c];
+      if (!tile) continue;
+      removed.push(tile);
+      grid[r][c] = null;
+    }
+
+    const pxA = cellCenterPx(originA.r, originA.c);
+    const pxB = cellCenterPx(originB.r, originB.c);
+    spawnShockwave((pxA.x + pxB.x) / 2, (pxA.y + pxB.y) / 2, {
+      size: SIZE * CELL * (bothWildcard ? 2.2 : 1.8),
+      variant: 'combo',
+      durationMs: 750,
+    });
+    if (tileA.special === 'cross') spawnCrossBeams(originA);
+    if (tileB.special === 'cross') spawnCrossBeams(originB);
+    for (const origin of bombOrigins) {
+      const p = cellCenterPx(origin.r, origin.c);
+      spawnShockwave(p.x, p.y, { size: CELL * 3.2, durationMs: 550 });
+    }
+    for (const origin of quadOrigins) {
+      const p = cellCenterPx(origin.r, origin.c);
+      spawnShockwave(p.x, p.y, { size: CELL * 5.2, variant: 'quad', durationMs: 650 });
+    }
+    for (const origin of crossOrigins) spawnCrossBeams(origin);
+    for (const origin of wildcardOrigins) {
+      const p = cellCenterPx(origin.r, origin.c);
+      spawnShockwave(p.x, p.y, { size: SIZE * CELL * 1.1, rainbow: true, durationMs: 600 });
+    }
+
+    for (const tile of removed) {
+      tile.el.classList.add('zapped');
+      explodeTile(tile);
+    }
+
+    const gained = removed.length * 15 + 250;
+    score += gained;
+    scoreEl.textContent = score;
+    messageEl.textContent = bothWildcard ? `ULTIMATE COMBO! +${gained}` : `MEGA COMBO! +${gained}`;
+    sfx.megaCombo();
+
+    await sleep(EXPLODE_MS);
     for (const tile of removed) tile.el.remove();
 
     applyGravityAnimated();
@@ -1196,8 +1429,10 @@
     let chain = 0;
     let firstPass = true;
     while (true) {
-      const { cells: matchedCells, runs } = findMatchesDetailed(snapshotGrid());
-      if (matchedCells.length === 0) break;
+      const snapshot = snapshotGrid();
+      const { cells: matchedCells, runs } = findMatchesDetailed(snapshot);
+      const quadBlocks = find2x2Blocks(snapshot);
+      if (matchedCells.length === 0 && quadBlocks.length === 0) break;
       chain++;
 
       // L/T/+ shaped matches (an intersecting horizontal + vertical run, combined
@@ -1249,14 +1484,39 @@
           convergeTarget.set(key, spawnCell);
         }
       }
+
+      // A 2x2 same-color block is a distinct match shape from line runs — it
+      // spawns a "quad" gem. Independent of the run-based specials above; its
+      // cells simply won't already be claimed by them in the ordinary case.
+      for (const block of quadBlocks) {
+        const preferred = pickSwapPreferred(block);
+        const spawnCell = (preferred && !spawnMap.has(cellKey(preferred.r, preferred.c)))
+          ? preferred
+          : block.find(cell => isFree(cell) && !spawnMap.has(cellKey(cell.r, cell.c))) || block[0];
+        const spawnKey = cellKey(spawnCell.r, spawnCell.c);
+        if (spawnMap.has(spawnKey)) continue;
+        spawnMap.set(spawnKey, 'quad');
+        for (const cell of block) {
+          const key = cellKey(cell.r, cell.c);
+          if (key === spawnKey) continue;
+          if (!convergeTarget.has(key)) convergeTarget.set(key, spawnCell);
+        }
+      }
       firstPass = false;
 
       const toClear = new Set(matchedCells.map(({ r, c }) => cellKey(r, c)));
+      for (const block of quadBlocks) {
+        for (const cell of block) toClear.add(cellKey(cell.r, cell.c));
+      }
       for (const key of spawnMap.keys()) toClear.delete(key);
 
-      // Any bomb or cross caught in the clear detonates — a 3x3 area or the full
-      // row+column — which can chain into further specials the blast reaches.
-      const { bombOrigins, crossOrigins, blastCells, processedSpecials } = expandSpecialChain(toClear);
+      // Any bomb, quad, cross, or wildcard caught in the clear detonates its own
+      // ability — a 3x3/5x5 area, the full row+column, or every gem of its
+      // color — which can chain into further specials the blast reaches. This
+      // is also how a raw special swept into a bigger forming match still gets
+      // to trigger its own effect even as another cell in that match survives
+      // as the newly created special gem.
+      const { bombOrigins, quadOrigins, crossOrigins, wildcardOrigins, blastCells } = expandSpecialChain(toClear);
       // A blast reaching a cell that was about to spawn a special gem destroys it
       // instead — anything that was converging toward it just fades normally.
       for (const key of toClear) spawnMap.delete(key);
@@ -1277,8 +1537,16 @@
         const p = cellCenterPx(origin.r, origin.c);
         spawnShockwave(p.x, p.y, { size: CELL * 3.2, durationMs: 550 });
       }
+      for (const origin of quadOrigins) {
+        const p = cellCenterPx(origin.r, origin.c);
+        spawnShockwave(p.x, p.y, { size: CELL * 5.2, variant: 'quad', durationMs: 650 });
+      }
       for (const origin of crossOrigins) {
         spawnCrossBeams(origin);
+      }
+      for (const origin of wildcardOrigins) {
+        const p = cellCenterPx(origin.r, origin.c);
+        spawnShockwave(p.x, p.y, { size: SIZE * CELL * 1.1, rainbow: true, durationMs: 600 });
       }
       for (const tile of removed) {
         const key = cellKey(tile.r, tile.c);
@@ -1302,24 +1570,41 @@
         setTimeout(() => markSpecial(tile, type), Math.round(CONVERGE_MS * 0.7));
       }
 
-      const gained = toClear.size * 10 * chain + bombOrigins.length * 50 + crossOrigins.length * 80;
+      const gained = toClear.size * 10 * chain + bombOrigins.length * 50 + crossOrigins.length * 80 +
+        quadOrigins.length * 90 + wildcardOrigins.length * 120;
       score += gained;
       scoreEl.textContent = score;
       const spawnedTypes = [...spawnMap.values()];
-      if (crossOrigins.length > 0) sfx.cross();
+      const spawnedSet = new Set(spawnedTypes);
+      // Trigger sounds for any raw specials caught and detonated by this clear...
       if (bombOrigins.length > 0) sfx.bomb();
-      if (crossOrigins.length === 0 && bombOrigins.length === 0) {
-        if (spawnedTypes.length > 0) sfx.special();
-        else sfx.match(chain);
+      if (quadOrigins.length > 0) sfx.quad();
+      if (crossOrigins.length > 0) sfx.cross();
+      if (wildcardOrigins.length > 0) sfx.wildcardZap();
+      // ...plus a distinct creation sound for whichever new special gem(s) this
+      // clear spawns, so a match feels tied to the ability it just granted.
+      if (spawnedSet.has('bomb')) sfx.createBomb();
+      if (spawnedSet.has('cross')) sfx.createCross();
+      if (spawnedSet.has('wildcard')) sfx.createWildcard();
+      if (spawnedSet.has('quad')) sfx.createQuad();
+      if (spawnedTypes.length === 0 && bombOrigins.length === 0 && crossOrigins.length === 0 &&
+          quadOrigins.length === 0 && wildcardOrigins.length === 0) {
+        sfx.match(chain);
       }
       if (crossOrigins.length > 0) {
         messageEl.textContent = `Cross blast! +${gained}`;
       } else if (bombOrigins.length > 0) {
         messageEl.textContent = `Boom! +${gained}`;
+      } else if (quadOrigins.length > 0) {
+        messageEl.textContent = `Quad blast! +${gained}`;
+      } else if (wildcardOrigins.length > 0) {
+        messageEl.textContent = `Wildcard zap! +${gained}`;
       } else if (spawnedTypes.includes('cross')) {
         messageEl.textContent = `Cross gem created! +${gained}`;
       } else if (spawnedTypes.includes('wildcard')) {
         messageEl.textContent = `Wildcard gem created! +${gained}`;
+      } else if (spawnedTypes.includes('quad')) {
+        messageEl.textContent = `Quad gem created! +${gained}`;
       } else if (spawnedTypes.length > 0) {
         messageEl.textContent = `Special gem created! +${gained}`;
       } else {
@@ -1328,7 +1613,9 @@
 
       let waitMs = MATCH_MS;
       if (convergeTarget.size > 0) waitMs = Math.max(waitMs, CONVERGE_MS);
-      if (bombOrigins.length > 0 || crossOrigins.length > 0) waitMs = Math.max(waitMs, EXPLODE_MS);
+      if (bombOrigins.length > 0 || crossOrigins.length > 0 || quadOrigins.length > 0 || wildcardOrigins.length > 0) {
+        waitMs = Math.max(waitMs, EXPLODE_MS);
+      }
       await sleep(waitMs);
       for (const tile of removed) tile.el.remove();
 
