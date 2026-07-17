@@ -508,7 +508,7 @@
     osc.stop(start + duration + 0.02);
   }
 
-  function playNoise({ duration, gain = 0.2, delay = 0, filterFreq = 1200 }) {
+  function playNoise({ duration, gain = 0.2, delay = 0, filterFreq = 1200, filterType = 'lowpass', Q }) {
     if (!soundEnabled) return;
     const ctx = getAudioCtx();
     if (!ctx) return;
@@ -520,8 +520,12 @@
     const noise = ctx.createBufferSource();
     noise.buffer = buffer;
     const filter = ctx.createBiquadFilter();
-    filter.type = 'lowpass';
+    filter.type = filterType;
     filter.frequency.value = filterFreq;
+    // A bandpass filter with a raised Q rings around its center frequency
+    // instead of just rolling off — that resonant ring is what reads as
+    // "hollow" (like a boom inside a shell) rather than a flat rumble.
+    if (Q !== undefined) filter.Q.value = Q;
     const g = ctx.createGain();
     g.gain.setValueAtTime(gain, start);
     g.gain.exponentialRampToValueAtTime(0.001, start + duration);
@@ -569,19 +573,14 @@
     },
     // Trigger/detonation sounds — played when a special gem's ability fires.
     bomb() {
-      // A sharp electric zap igniting into a dense burst of crisp, popping
-      // fire crackles — short high-filtered noise bursts rather than one
-      // long muffled roar — with just a lean thump underneath for weight.
-      playNoise({ duration: 0.06, gain: 0.26, filterFreq: 9500 });
-      playTone({ freq: 2200, freqEnd: 300, duration: 0.08, type: 'square', gain: 0.16 });
-      playNoise({ duration: 0.04, gain: 0.2, filterFreq: 6500, delay: 0.06 });
-      playNoise({ duration: 0.03, gain: 0.18, filterFreq: 7200, delay: 0.1 });
-      playNoise({ duration: 0.04, gain: 0.22, filterFreq: 5800, delay: 0.15 });
-      playNoise({ duration: 0.03, gain: 0.16, filterFreq: 6800, delay: 0.2 });
-      playNoise({ duration: 0.04, gain: 0.19, filterFreq: 6000, delay: 0.26 });
-      playNoise({ duration: 0.03, gain: 0.14, filterFreq: 7000, delay: 0.32 });
-      playNoise({ duration: 0.03, gain: 0.12, filterFreq: 6400, delay: 0.38 });
-      playTone({ freq: 130, freqEnd: 45, duration: 0.25, type: 'sawtooth', gain: 0.16, delay: 0.05 });
+      // A crisp sharp crack, a punchy explosive sub-bass hit, and a hollow
+      // resonant boom (bandpass-filtered noise ringing at a low center
+      // frequency, like a blast inside a shell) instead of a flat rumble.
+      playNoise({ duration: 0.04, gain: 0.3, filterFreq: 9000, filterType: 'highpass' });
+      playTone({ freq: 2400, freqEnd: 500, duration: 0.06, type: 'square', gain: 0.15 });
+      playTone({ freq: 95, freqEnd: 28, duration: 0.16, type: 'sine', gain: 0.34, delay: 0.015 });
+      playNoise({ duration: 0.32, gain: 0.28, filterFreq: 420, filterType: 'bandpass', Q: 2.6, delay: 0.02 });
+      playNoise({ duration: 0.14, gain: 0.14, filterFreq: 5800, delay: 0.08 });
     },
     cross() {
       // Electric arc: a few rapid stepped-pitch flickers plus a sharp crackle,
