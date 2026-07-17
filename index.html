@@ -370,6 +370,9 @@
 
   const GRACE_MS = 650;
   const GRACE_POLL_MS = 50;
+  // Matches the swap-speed slider's max="900" — the longest an individual
+  // tile's own swap animation could legitimately still be running.
+  const SWAP_MS_MAX = 900;
 
   let grid = Array.from({ length: SIZE }, () => Array(SIZE).fill(null));
   let score = 0;
@@ -643,7 +646,7 @@
     el.addEventListener('pointerup', onPointerUp);
     el.addEventListener('pointercancel', onPointerCancel);
     board.appendChild(el);
-    const tile = { id: nextId++, gem, r, c, el, scale: 1, special: null, busy: false };
+    const tile = { id: nextId++, gem, r, c, el, scale: 1, special: null, busy: false, animating: false };
     el._tile = tile;
     setPos(tile, r, c, true);
     return tile;
@@ -944,6 +947,19 @@
     return matches.some(m => m.r === cell.r && m.c === cell.c);
   }
 
+  // Would swapping a and b back to their pre-swap positions complete a match
+  // right now? Used to detect the "return" half of the quick-swap trick (the
+  // sacrificial gem only completes the line once it reverts) without having
+  // to actually perform the swap first.
+  function wouldMatchAfterRevert(a, b) {
+    const g = snapshotGrid();
+    const tmp = g[a.r][a.c];
+    g[a.r][a.c] = g[b.r][b.c];
+    g[b.r][b.c] = tmp;
+    const matches = findMatches(g);
+    return matches.some(m => (m.r === a.r && m.c === a.c) || (m.r === b.r && m.c === b.c));
+  }
+
   // The run(s) of 3+ currently passing through a cell.
   function matchRunsAt(cell) {
     const { runs } = findMatchesDetailed(snapshotGrid());
@@ -951,22 +967,33 @@
   }
 
   // A match formed by the "quick swap" assist trick can involve OTHER tiles
-  // that are still mid-swipe themselves (an assist gem sliding into the line).
-  // Wait for all of them to finish (no longer tile.busy) before the match is
-  // allowed to combine — otherwise the clear/converge animation can start while
-  // an assist gem is still visibly sliding into place. a/b are excluded since
-  // this swap's own animation is already accounted for by the caller.
+  // that are still visibly sliding into place themselves (an assist gem's own
+  // swap animation still in flight). Wait for all of them to finish animating
+  // before the match is allowed to combine — otherwise the clear/converge
+  // animation can start while an assist gem is still visibly moving.
+  //
+  // This deliberately checks tile.animating (true only for the ~SWAP_MS of an
+  // actual position change), not tile.busy (true for an assist's whole
+  // decide-phase, including its own grace-period wait). Several swipes can be
+  // racing to resolve the very same match at once, each waiting on the
+  // others — gating on the full decide-phase would have them wait on each
+  // other's grace periods too, adding real delay for no visual benefit once
+  // everything has actually stopped moving. a/b are excluded since this
+  // swap's own animation is already accounted for by the caller.
   async function waitForOtherTilesToSettle(a, b) {
     const isAOrB = cell => (cell.r === a.r && cell.c === a.c) || (cell.r === b.r && cell.c === b.c);
     let waited = 0;
-    while (waited < GRACE_MS) {
+    // Capped by the longest a swap animation could legitimately run (the
+    // slider's max), not GRACE_MS — that's a different, much longer window
+    // and would time out too early for a slow swap-speed setting.
+    while (waited < SWAP_MS_MAX + 300) {
       const runs = [...matchRunsAt(a), ...matchRunsAt(b)];
-      const stillSettling = runs.some(run => run.some(cell => {
+      const stillAnimating = runs.some(run => run.some(cell => {
         if (isAOrB(cell)) return false;
         const t = grid[cell.r][cell.c];
-        return t && t.busy;
+        return t && t.animating;
       }));
-      if (!stillSettling) return;
+      if (!stillAnimating) return;
       await sleep(GRACE_POLL_MS);
       waited += GRACE_POLL_MS;
     }
@@ -989,18 +1016,23 @@
     resolveQueueBusy = false;
   }
 
-  // Waits for a match to appear at either cell without blocking anything else on
-  // the board — this is what lets an assist swipe elsewhere complete the line
-  // while this swap is still "hanging" in its swapped position.
-  async function waitForGraceMatch(a, b) {
-    if (cellIsMatched(a) || cellIsMatched(b)) return true;
+  // Polls during the grace window for either way the quick-swap trick can pay
+  // off: a match appearing in the current (swapped) position, or — the
+  // "return" variant — a match that would appear the instant this swap
+  // reverts. Catching the latter as soon as it's true (rather than only after
+  // the full grace window elapses) is what lets the swap revert and combine
+  // right away once the assist gems are in place, instead of always waiting
+  // out the rest of the grace period first.
+  async function waitForGraceOutcome(a, b) {
+    if (cellIsMatched(a) || cellIsMatched(b)) return 'matched';
     let elapsed = 0;
     while (elapsed < GRACE_MS) {
+      if (wouldMatchAfterRevert(a, b)) return 'revert';
       await sleep(GRACE_POLL_MS);
       elapsed += GRACE_POLL_MS;
-      if (cellIsMatched(a) || cellIsMatched(b)) return true;
+      if (cellIsMatched(a) || cellIsMatched(b)) return 'matched';
     }
-    return false;
+    return 'none';
   }
 
   // Only the two tiles being swapped are locked (tile.busy) — every other tile
@@ -1017,12 +1049,16 @@
 
     tileA.busy = true;
     tileB.busy = true;
+    tileA.animating = true;
+    tileB.animating = true;
     const elA = tileA.el;
     const elB = tileB.el;
     elA.classList.add('pending');
     elB.classList.add('pending');
     doSwap(a, b);
     await sleep(SWAP_MS);
+    tileA.animating = false;
+    tileB.animating = false;
     elA.style.transitionDuration = '';
     elB.style.transitionDuration = '';
 
@@ -1043,7 +1079,8 @@
       return;
     }
 
-    if (await waitForGraceMatch(a, b)) {
+    const outcome = await waitForGraceOutcome(a, b);
+    if (outcome === 'matched') {
       // An assist gem forming part of this match may still be sliding into
       // place — let it finish before the match actually combines.
       await waitForOtherTilesToSettle(a, b);
@@ -1059,11 +1096,16 @@
       return;
     }
 
-    // Still no match — revert, then check once more: an assist swipe may have
-    // just completed the original line while this one was away.
-    flashInvalid(elA, elB);
+    // No match while swapped — revert. If we caught early that reverting
+    // completes the line (the assist gems are already in place), skip the
+    // invalid flash and go straight back; otherwise this really is a dead end.
+    if (outcome === 'none') flashInvalid(elA, elB);
+    tileA.animating = true;
+    tileB.animating = true;
     if (grid[a.r][a.c] && grid[b.r][b.c]) doSwap(a, b);
     await sleep(SWAP_MS);
+    tileA.animating = false;
+    tileB.animating = false;
     elA.style.transitionDuration = '';
     elB.style.transitionDuration = '';
 
