@@ -112,6 +112,17 @@
     50% { filter: brightness(1.9) saturate(2) hue-rotate(-20deg); }
   }
 
+  .tile.pending {
+    box-shadow: 0 0 0 3px rgba(255, 215, 0, 0.85), 0 0 14px 4px rgba(255, 215, 0, 0.5),
+      inset 0 -4px 6px rgba(0,0,0,0.25), inset 0 3px 4px rgba(255,255,255,0.3);
+    animation: pendingPulse 0.5s ease-in-out infinite;
+  }
+
+  @keyframes pendingPulse {
+    0%, 100% { filter: brightness(1); }
+    50% { filter: brightness(1.3); }
+  }
+
   .tile.special {
     box-shadow: 0 0 0 3px rgba(255,255,255,0.85), 0 0 16px 5px rgba(255,255,255,0.55),
       inset 0 -4px 6px rgba(0,0,0,0.25), inset 0 3px 4px rgba(255,255,255,0.3);
@@ -268,14 +279,22 @@
   board.style.width = (SIZE * TILE + (SIZE - 1) * GAP) + 'px';
   board.style.height = (SIZE * TILE + (SIZE - 1) * GAP) + 'px';
 
+  const GRACE_MS = 650;
+  const GRACE_POLL_MS = 50;
+
   let grid = Array.from({ length: SIZE }, () => Array(SIZE).fill(null));
   let score = 0;
   let moves = 0;
   let best = Number(localStorage.getItem('bejeweled-best') || 0);
   let selected = null;
-  let locked = false;
   let nextId = 0;
   let pointerState = null;
+  // Multiple swaps can be in flight at once (each tile only blocks itself via
+  // tile.busy). Once a swap is confirmed as a match it's handed to this queue
+  // so the actual clear+gravity animations never run concurrently and stomp
+  // on each other's board state.
+  let resolveQueue = [];
+  let resolveQueueBusy = false;
 
   bestEl.textContent = best;
 
@@ -420,7 +439,7 @@
     el.addEventListener('pointerup', onPointerUp);
     el.addEventListener('pointercancel', onPointerCancel);
     board.appendChild(el);
-    const tile = { id: nextId++, gem, r, c, el, scale: 1, special: null };
+    const tile = { id: nextId++, gem, r, c, el, scale: 1, special: null, busy: false };
     el._tile = tile;
     setPos(tile, r, c, true);
     return tile;
@@ -539,7 +558,8 @@
   }
 
   function handleTap(r, c) {
-    if (locked) return;
+    const tapped = grid[r][c];
+    if (!tapped || tapped.busy) return;
     if (!selected) {
       selectTile(r, c);
       return;
@@ -562,8 +582,8 @@
   }
 
   function onPointerDown(e) {
-    if (locked) return;
     const tile = e.currentTarget._tile;
+    if (tile.busy) return;
     pointerState = {
       pointerId: e.pointerId,
       r: tile.r,
@@ -580,7 +600,7 @@
   }
 
   function onPointerMove(e) {
-    if (!pointerState || pointerState.pointerId !== e.pointerId || pointerState.moved || locked) return;
+    if (!pointerState || pointerState.pointerId !== e.pointerId || pointerState.moved) return;
     const dx = e.clientX - pointerState.startX;
     const dy = e.clientY - pointerState.startY;
     if (Math.abs(dx) < SWIPE_THRESHOLD && Math.abs(dy) < SWIPE_THRESHOLD) return;
@@ -635,45 +655,6 @@
     }, 300);
   }
 
-  async function attemptSwap(a, b) {
-    if (locked) return;
-    const tileA = grid[a.r][a.c];
-    const tileB = grid[b.r][b.c];
-    if (!tileA || !tileB) return;
-
-    locked = true;
-    const elA = tileA.el;
-    const elB = tileB.el;
-    doSwap(a, b);
-    await sleep(SWAP_MS);
-
-    // A wildcard always activates on swipe, regardless of whether it forms a match.
-    const wildcardTile = tileA.special === 'wildcard' ? tileA : (tileB.special === 'wildcard' ? tileB : null);
-    if (wildcardTile) {
-      const otherTile = wildcardTile === tileA ? tileB : tileA;
-      moves++;
-      movesEl.textContent = moves;
-      await triggerWildcard(wildcardTile, otherTile);
-      await resolveMatches();
-      locked = false;
-      return;
-    }
-
-    const matches = findMatches(snapshotGrid());
-    if (matches.length === 0) {
-      flashInvalid(elA, elB);
-      doSwap(a, b);
-      await sleep(SWAP_MS);
-      locked = false;
-      return;
-    }
-
-    moves++;
-    movesEl.textContent = moves;
-    await resolveMatches({ from: a, to: b });
-    locked = false;
-  }
-
   function cellKey(r, c) {
     return `${r},${c}`;
   }
@@ -681,6 +662,113 @@
   function parseCellKey(key) {
     const [r, c] = key.split(',').map(Number);
     return { r, c };
+  }
+
+  function cellIsMatched(cell) {
+    const matches = findMatches(snapshotGrid());
+    return matches.some(m => m.r === cell.r && m.c === cell.c);
+  }
+
+  // Queues the actual clear+gravity resolution so concurrent swaps (which are
+  // otherwise fully independent) never mutate the shared grid at the same time.
+  function enqueueResolution(taskFn) {
+    resolveQueue.push(taskFn);
+    drainResolveQueue();
+  }
+
+  async function drainResolveQueue() {
+    if (resolveQueueBusy) return;
+    resolveQueueBusy = true;
+    while (resolveQueue.length > 0) {
+      const task = resolveQueue.shift();
+      await task();
+    }
+    resolveQueueBusy = false;
+  }
+
+  // Waits for a match to appear at either cell without blocking anything else on
+  // the board — this is what lets an assist swipe elsewhere complete the line
+  // while this swap is still "hanging" in its swapped position.
+  async function waitForGraceMatch(a, b) {
+    if (cellIsMatched(a) || cellIsMatched(b)) return true;
+    let elapsed = 0;
+    while (elapsed < GRACE_MS) {
+      await sleep(GRACE_POLL_MS);
+      elapsed += GRACE_POLL_MS;
+      if (cellIsMatched(a) || cellIsMatched(b)) return true;
+    }
+    return false;
+  }
+
+  // Only the two tiles being swapped are locked (tile.busy) — every other tile
+  // on the board stays fully interactive, so several swipes can be in flight
+  // at once. A swap that doesn't immediately match isn't reverted right away:
+  // it hangs for a grace window, and even after reverting we check once more.
+  // That's what enables the classic "quick swap" assist trick — moving other
+  // same-color gems into the line while this swap is away completes the match
+  // either while it's swapped out, or the instant it returns home.
+  async function attemptSwap(a, b) {
+    const tileA = grid[a.r][a.c];
+    const tileB = grid[b.r][b.c];
+    if (!tileA || !tileB || tileA.busy || tileB.busy) return;
+
+    tileA.busy = true;
+    tileB.busy = true;
+    const elA = tileA.el;
+    const elB = tileB.el;
+    elA.classList.add('pending');
+    elB.classList.add('pending');
+    doSwap(a, b);
+    await sleep(SWAP_MS);
+
+    // A wildcard always activates on swipe, regardless of whether it forms a match.
+    const wildcardTile = tileA.special === 'wildcard' ? tileA : (tileB.special === 'wildcard' ? tileB : null);
+    if (wildcardTile) {
+      const otherTile = wildcardTile === tileA ? tileB : tileA;
+      elA.classList.remove('pending');
+      elB.classList.remove('pending');
+      enqueueResolution(async () => {
+        moves++;
+        movesEl.textContent = moves;
+        await triggerWildcard(wildcardTile, otherTile);
+        await resolveMatches();
+      });
+      tileA.busy = false;
+      tileB.busy = false;
+      return;
+    }
+
+    if (await waitForGraceMatch(a, b)) {
+      elA.classList.remove('pending');
+      elB.classList.remove('pending');
+      enqueueResolution(async () => {
+        moves++;
+        movesEl.textContent = moves;
+        await resolveMatches({ from: a, to: b });
+      });
+      tileA.busy = false;
+      tileB.busy = false;
+      return;
+    }
+
+    // Still no match — revert, then check once more: an assist swipe may have
+    // just completed the original line while this one was away.
+    flashInvalid(elA, elB);
+    if (grid[a.r][a.c] && grid[b.r][b.c]) doSwap(a, b);
+    await sleep(SWAP_MS);
+
+    if (cellIsMatched(a) || cellIsMatched(b)) {
+      enqueueResolution(async () => {
+        moves++;
+        movesEl.textContent = moves;
+        await resolveMatches({ from: b, to: a });
+      });
+    }
+
+    elA.classList.remove('pending');
+    elB.classList.remove('pending');
+    tileA.busy = false;
+    tileB.busy = false;
   }
 
   // Clears every gem matching otherTile's color (plus the wildcard itself), with
@@ -845,7 +933,7 @@
       messageEl.textContent = '';
     } else {
       setTimeout(() => {
-        if (!locked) messageEl.textContent = '';
+        messageEl.textContent = '';
       }, 1200);
     }
   }
@@ -880,7 +968,7 @@
     score = 0;
     moves = 0;
     selected = null;
-    locked = false;
+    resolveQueue = [];
     scoreEl.textContent = '0';
     movesEl.textContent = '0';
     messageEl.textContent = '';
@@ -889,7 +977,7 @@
 
   restartBtn.addEventListener('click', newGame);
   shuffleBtn.addEventListener('click', () => {
-    if (locked) return;
+    resolveQueue = [];
     buildBoardFromLayout(genLayout());
     messageEl.textContent = 'Board shuffled!';
   });
