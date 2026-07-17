@@ -155,6 +155,54 @@
     to { filter: hue-rotate(360deg) brightness(1.05); }
   }
 
+  .tile.special.cross {
+    background: radial-gradient(circle, #ffffff 0%, #9fe3ff 55%, #4aa8ff 100%);
+  }
+
+  .tile.special.cross::after {
+    content: '✚';
+    position: absolute;
+    top: 1px;
+    right: 4px;
+    font-size: 0.9rem;
+    color: #063a5e;
+    text-shadow: 0 0 6px rgba(255,255,255,0.9);
+    pointer-events: none;
+  }
+
+  .beam {
+    position: absolute;
+    pointer-events: none;
+    z-index: 6;
+    border-radius: 4px;
+    box-shadow: 0 0 24px 6px rgba(180,230,255,0.8);
+    transform-origin: center;
+  }
+
+  .beam-h {
+    height: 8px;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.95) 15%, rgba(140,220,255,0.9) 50%, rgba(255,255,255,0.95) 85%, transparent);
+    animation: beamSweepH 0.45s ease-out forwards;
+  }
+
+  .beam-v {
+    width: 8px;
+    background: linear-gradient(180deg, transparent, rgba(255,255,255,0.95) 15%, rgba(140,220,255,0.9) 50%, rgba(255,255,255,0.95) 85%, transparent);
+    animation: beamSweepV 0.45s ease-out forwards;
+  }
+
+  @keyframes beamSweepH {
+    0% { transform: scaleX(0); opacity: 1; }
+    70% { transform: scaleX(1); opacity: 1; }
+    100% { transform: scaleX(1); opacity: 0; }
+  }
+
+  @keyframes beamSweepV {
+    0% { transform: scaleY(0); opacity: 1; }
+    70% { transform: scaleY(1); opacity: 1; }
+    100% { transform: scaleY(1); opacity: 0; }
+  }
+
   .tile.zapped {
     animation: zapFlash 0.3s ease;
   }
@@ -254,7 +302,7 @@
 </head>
 <body>
   <h1>💎 BEJEWELED 💎</h1>
-  <div class="subtitle">Match 4 for a blast gem, match 5 for a wildcard — swipe the wildcard to zap a color</div>
+  <div class="subtitle">Match 4 for a blast gem, 5 in a line for a wildcard, or an L/T/+ shape for a cross gem</div>
 
   <div class="hud">
     <div>
@@ -293,6 +341,7 @@
   const CELL = TILE + GAP;
   let SWAP_MS = 280;
   const MATCH_MS = 300;
+  const CONVERGE_MS = 380;
   const EXPLODE_MS = 500;
   const FALL_MS = 320;
   const SWIPE_THRESHOLD = 18;
@@ -397,6 +446,38 @@
     return findMatchesDetailed(g).cells;
   }
 
+  // Detects intersecting horizontal+vertical runs (L, T, or + shapes) whose
+  // combined size is 5 or more — these spawn a cross gem instead of two
+  // separate line specials.
+  function findCrossGroups(runs) {
+    const horizontals = runs.filter(run => run.length >= 3 && run[0].r === run[run.length - 1].r);
+    const verticals = runs.filter(run => run.length >= 3 && run[0].c === run[run.length - 1].c);
+    const groups = [];
+    for (const hRun of horizontals) {
+      const hRow = hRun[0].r;
+      for (const vRun of verticals) {
+        const vCol = vRun[0].c;
+        const intersects = hRun.some(cell => cell.c === vCol) && vRun.some(cell => cell.r === hRow);
+        if (!intersects) continue;
+        if (hRun.length + vRun.length - 1 < 5) continue;
+        groups.push({ hRun, vRun, intersection: { r: hRow, c: vCol } });
+      }
+    }
+    return groups;
+  }
+
+  function dedupeCells(cells) {
+    const seen = new Set();
+    const result = [];
+    for (const cell of cells) {
+      const key = cellKey(cell.r, cell.c);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(cell);
+    }
+    return result;
+  }
+
   function hasPossibleMove(g) {
     for (let r = 0; r < SIZE; r++) {
       for (let c = 0; c < SIZE; c++) {
@@ -483,14 +564,16 @@
     return tile;
   }
 
-  // type: 'bomb' (4-match, blasts a 3x3 area when cleared) or
-  // 'wildcard' (5-match, zaps every gem of a color when swiped).
+  // type: 'bomb' (4-match, blasts a 3x3 area when cleared), 'wildcard'
+  // (5-in-a-line, zaps every gem of a color when swiped), or 'cross' (L/T/+
+  // shaped match, clears its whole row+column when cleared).
   function markSpecial(tile, type) {
     tile.special = type;
     tile.el.classList.add('special', type);
     if (type === 'wildcard') tile.el.textContent = '🌟';
     const x = tile.c * CELL;
     const y = tile.r * CELL;
+    tile.el.style.transitionDuration = '';
     tile.el.style.transform = `translate(${x}px, ${y}px) scale(1.4)`;
     setTimeout(() => {
       tile.el.style.transform = `translate(${x}px, ${y}px) scale(1)`;
@@ -499,6 +582,40 @@
 
   function cellCenterPx(r, c) {
     return { x: GAP + c * CELL + TILE / 2, y: GAP + r * CELL + TILE / 2 };
+  }
+
+  // Animates a matched tile flying toward the cell where a new special gem is
+  // forming, shrinking and fading as it merges in. Used for every non-spawn
+  // cell in a run/group that's about to become a bomb, wildcard, or cross gem.
+  function convergeTile(tile, targetR, targetC) {
+    const x = targetC * CELL;
+    const y = targetR * CELL;
+    tile.scale = 0;
+    tile.el.style.transitionDuration = CONVERGE_MS + 'ms';
+    tile.el.style.transitionTimingFunction = 'cubic-bezier(0.4, 0, 0.7, 1)';
+    tile.el.style.transform = `translate(${x}px, ${y}px) scale(0.15)`;
+    tile.el.style.opacity = '0';
+  }
+
+  // Two beams sweeping the full row and column a cross gem is on.
+  function spawnCrossBeams(origin) {
+    const p = cellCenterPx(origin.r, origin.c);
+
+    const hBeam = document.createElement('div');
+    hBeam.className = 'beam beam-h';
+    hBeam.style.top = (p.y - 4) + 'px';
+    hBeam.style.left = '0px';
+    hBeam.style.width = boardSize + 'px';
+    board.appendChild(hBeam);
+    hBeam.addEventListener('animationend', () => hBeam.remove());
+
+    const vBeam = document.createElement('div');
+    vBeam.className = 'beam beam-v';
+    vBeam.style.left = (p.x - 4) + 'px';
+    vBeam.style.top = '0px';
+    vBeam.style.height = boardSize + 'px';
+    board.appendChild(vBeam);
+    vBeam.addEventListener('animationend', () => vBeam.remove());
   }
 
   function spawnShockwave(cx, cy, opts) {
@@ -528,30 +645,54 @@
     tile.el.style.opacity = '0';
   }
 
-  // Expands a set of "r,c" cell keys to include the 3x3 blast radius of any bomb
-  // caught inside it, chaining into further bombs the blast reaches.
-  // Returns the bomb tiles that detonated and the cells destroyed purely by blast.
-  function expandBombChain(toClear) {
+  // Expands a set of "r,c" cell keys to include the blast radius of any special
+  // gem caught inside it — a 3x3 area for a bomb, the full row+column for a
+  // cross gem — chaining into further specials the blast reaches.
+  function expandSpecialChain(toClear) {
     const bombOrigins = [];
+    const crossOrigins = [];
     const blastCells = new Set();
-    const processedBombs = new Set();
+    const processedSpecials = new Set();
     let expanded = true;
     while (expanded) {
       expanded = false;
       for (const key of [...toClear]) {
         const { r, c } = parseCellKey(key);
         const tile = grid[r][c];
-        if (!tile || tile.special !== 'bomb' || processedBombs.has(tile.id)) continue;
-        processedBombs.add(tile.id);
-        bombOrigins.push({ r, c });
-        blastCells.add(key);
-        for (let dr = -1; dr <= 1; dr++) {
-          for (let dc = -1; dc <= 1; dc++) {
-            if (dr === 0 && dc === 0) continue;
-            const nr = r + dr;
-            const nc = c + dc;
-            if (nr < 0 || nr >= SIZE || nc < 0 || nc >= SIZE) continue;
-            const nKey = cellKey(nr, nc);
+        if (!tile || !tile.special || processedSpecials.has(tile.id)) continue;
+
+        if (tile.special === 'bomb') {
+          processedSpecials.add(tile.id);
+          bombOrigins.push({ r, c });
+          blastCells.add(key);
+          for (let dr = -1; dr <= 1; dr++) {
+            for (let dc = -1; dc <= 1; dc++) {
+              if (dr === 0 && dc === 0) continue;
+              const nr = r + dr;
+              const nc = c + dc;
+              if (nr < 0 || nr >= SIZE || nc < 0 || nc >= SIZE) continue;
+              const nKey = cellKey(nr, nc);
+              blastCells.add(nKey);
+              if (!toClear.has(nKey)) {
+                toClear.add(nKey);
+                expanded = true;
+              }
+            }
+          }
+        } else if (tile.special === 'cross') {
+          processedSpecials.add(tile.id);
+          crossOrigins.push({ r, c });
+          blastCells.add(key);
+          for (let cc = 0; cc < SIZE; cc++) {
+            const nKey = cellKey(r, cc);
+            blastCells.add(nKey);
+            if (!toClear.has(nKey)) {
+              toClear.add(nKey);
+              expanded = true;
+            }
+          }
+          for (let rr = 0; rr < SIZE; rr++) {
+            const nKey = cellKey(rr, c);
             blastCells.add(nKey);
             if (!toClear.has(nKey)) {
               toClear.add(nKey);
@@ -561,7 +702,7 @@
         }
       }
     }
-    return { bombOrigins, blastCells, processedBombs };
+    return { bombOrigins, crossOrigins, blastCells, processedSpecials };
   }
 
   function clearBoard() {
@@ -832,7 +973,7 @@
       }
     }
 
-    const { bombOrigins, blastCells, processedBombs } = expandBombChain(toClear);
+    const { bombOrigins, crossOrigins, blastCells, processedSpecials } = expandSpecialChain(toClear);
 
     const removed = [];
     for (const key of toClear) {
@@ -867,13 +1008,17 @@
       const dist = Math.hypot(origin2.r - origin.r, origin2.c - origin.c);
       setTimeout(() => spawnShockwave(p.x, p.y, { size: CELL * 3.2, durationMs: 550 }), dist * WILDCARD_STAGGER_MS);
     }
+    for (const origin2 of crossOrigins) {
+      const dist = Math.hypot(origin2.r - origin.r, origin2.c - origin.c);
+      setTimeout(() => spawnCrossBeams(origin2), dist * WILDCARD_STAGGER_MS);
+    }
 
-    const gained = removed.length * 10 + 100 + processedBombs.size * 50;
+    const gained = removed.length * 10 + 100 + bombOrigins.length * 50 + crossOrigins.length * 80;
     score += gained;
     scoreEl.textContent = score;
     messageEl.textContent = `Wildcard zap! +${gained}`;
 
-    const fadeMs = bombOrigins.length > 0 ? EXPLODE_MS : WILDCARD_FADE_MS;
+    const fadeMs = (bombOrigins.length > 0 || crossOrigins.length > 0) ? EXPLODE_MS : WILDCARD_FADE_MS;
     await sleep(maxDelay + fadeMs);
     for (const tile of removed) tile.el.remove();
 
@@ -889,34 +1034,69 @@
       if (matchedCells.length === 0) break;
       chain++;
 
-      // Runs of 4 spawn a bomb; runs of 5+ spawn a wildcard. Either survives at one
-      // cell of the run instead of being cleared with the rest.
-      const spawnMap = new Map();
-      for (const run of runs) {
-        if (run.length < 4) continue;
-        const type = run.length >= 5 ? 'wildcard' : 'bomb';
-        const isFree = cell => !grid[cell.r][cell.c] || !grid[cell.r][cell.c].special;
-        let spawnCell = null;
-        if (firstPass && swapContext) {
-          spawnCell = run.find(cell =>
+      // L/T/+ shaped matches (an intersecting horizontal + vertical run, combined
+      // size 5+) spawn a cross gem instead of two separate line specials. Runs of
+      // 4 spawn a bomb; straight runs of 5+ spawn a wildcard. Whichever gem forms,
+      // one cell of the match survives as the special instead of being cleared —
+      // every other matched cell in that run/group flies in and converges into it.
+      const isFree = cell => !grid[cell.r][cell.c] || !grid[cell.r][cell.c].special;
+      const pickSwapPreferred = cells => firstPass && swapContext
+        ? cells.find(cell =>
             isFree(cell) &&
             ((cell.r === swapContext.to.r && cell.c === swapContext.to.c) ||
-              (cell.r === swapContext.from.r && cell.c === swapContext.from.c))
-          );
+              (cell.r === swapContext.from.r && cell.c === swapContext.from.c)))
+        : null;
+
+      const spawnMap = new Map();
+      const convergeTarget = new Map();
+      const crossGroups = findCrossGroups(runs);
+      const crossClaimedRuns = new Set();
+      for (const g of crossGroups) {
+        crossClaimedRuns.add(g.hRun);
+        crossClaimedRuns.add(g.vRun);
+      }
+
+      for (const g of crossGroups) {
+        const groupCells = dedupeCells([...g.hRun, ...g.vRun]);
+        const spawnCell = pickSwapPreferred(groupCells)
+          || (isFree(g.intersection) ? g.intersection : null)
+          || groupCells.find(isFree)
+          || g.intersection;
+        const spawnKey = cellKey(spawnCell.r, spawnCell.c);
+        spawnMap.set(spawnKey, 'cross');
+        for (const cell of groupCells) {
+          const key = cellKey(cell.r, cell.c);
+          if (key === spawnKey) continue;
+          convergeTarget.set(key, spawnCell);
         }
-        if (!spawnCell) spawnCell = run.find(isFree) || run[Math.floor(run.length / 2)];
-        spawnMap.set(cellKey(spawnCell.r, spawnCell.c), type);
+      }
+
+      for (const run of runs) {
+        if (run.length < 4 || crossClaimedRuns.has(run)) continue;
+        const type = run.length >= 5 ? 'wildcard' : 'bomb';
+        const spawnCell = pickSwapPreferred(run) || run.find(isFree) || run[Math.floor(run.length / 2)];
+        const spawnKey = cellKey(spawnCell.r, spawnCell.c);
+        spawnMap.set(spawnKey, type);
+        for (const cell of run) {
+          const key = cellKey(cell.r, cell.c);
+          if (key === spawnKey) continue;
+          convergeTarget.set(key, spawnCell);
+        }
       }
       firstPass = false;
 
       const toClear = new Set(matchedCells.map(({ r, c }) => cellKey(r, c)));
       for (const key of spawnMap.keys()) toClear.delete(key);
 
-      // Any bomb caught in the clear detonates its 3x3 neighborhood, which can
-      // chain into further bombs reached by the blast.
-      const { bombOrigins, blastCells, processedBombs } = expandBombChain(toClear);
-      // A blast reaching a cell that was about to spawn a special gem destroys it instead.
+      // Any bomb or cross caught in the clear detonates — a 3x3 area or the full
+      // row+column — which can chain into further specials the blast reaches.
+      const { bombOrigins, crossOrigins, blastCells, processedSpecials } = expandSpecialChain(toClear);
+      // A blast reaching a cell that was about to spawn a special gem destroys it
+      // instead — anything that was converging toward it just fades normally.
       for (const key of toClear) spawnMap.delete(key);
+      for (const [key, target] of [...convergeTarget]) {
+        if (!spawnMap.has(cellKey(target.r, target.c))) convergeTarget.delete(key);
+      }
 
       const removed = [];
       for (const key of toClear) {
@@ -931,24 +1111,41 @@
         const p = cellCenterPx(origin.r, origin.c);
         spawnShockwave(p.x, p.y, { size: CELL * 3.2, durationMs: 550 });
       }
+      for (const origin of crossOrigins) {
+        spawnCrossBeams(origin);
+      }
       for (const tile of removed) {
-        if (blastCells.has(cellKey(tile.r, tile.c))) explodeTile(tile);
-        else setScale(tile, 0);
+        const key = cellKey(tile.r, tile.c);
+        if (blastCells.has(key)) {
+          explodeTile(tile);
+        } else if (convergeTarget.has(key)) {
+          const target = convergeTarget.get(key);
+          convergeTile(tile, target.r, target.c);
+        } else {
+          setScale(tile, 0);
+        }
       }
 
+      // Let the converging gems arrive before the spawn cell visibly pops into
+      // its special form — always true here, since a spawning run/group always
+      // has at least one other matched cell converging into it.
       for (const [key, type] of spawnMap) {
         const { r, c } = parseCellKey(key);
         const tile = grid[r][c];
-        if (tile) markSpecial(tile, type);
+        if (!tile) continue;
+        setTimeout(() => markSpecial(tile, type), Math.round(CONVERGE_MS * 0.7));
       }
 
-      const bombBonus = processedBombs.size * 50;
-      const gained = toClear.size * 10 * chain + bombBonus;
+      const gained = toClear.size * 10 * chain + bombOrigins.length * 50 + crossOrigins.length * 80;
       score += gained;
       scoreEl.textContent = score;
       const spawnedTypes = [...spawnMap.values()];
-      if (processedBombs.size > 0) {
+      if (crossOrigins.length > 0) {
+        messageEl.textContent = `Cross blast! +${gained}`;
+      } else if (bombOrigins.length > 0) {
         messageEl.textContent = `Boom! +${gained}`;
+      } else if (spawnedTypes.includes('cross')) {
+        messageEl.textContent = `Cross gem created! +${gained}`;
       } else if (spawnedTypes.includes('wildcard')) {
         messageEl.textContent = `Wildcard gem created! +${gained}`;
       } else if (spawnedTypes.length > 0) {
@@ -957,7 +1154,10 @@
         messageEl.textContent = chain > 1 ? `Combo x${chain}! +${gained}` : `Match! +${gained}`;
       }
 
-      await sleep(processedBombs.size > 0 ? EXPLODE_MS : MATCH_MS);
+      let waitMs = MATCH_MS;
+      if (convergeTarget.size > 0) waitMs = Math.max(waitMs, CONVERGE_MS);
+      if (bombOrigins.length > 0 || crossOrigins.length > 0) waitMs = Math.max(waitMs, EXPLODE_MS);
+      await sleep(waitMs);
       for (const tile of removed) tile.el.remove();
 
       applyGravityAnimated();
