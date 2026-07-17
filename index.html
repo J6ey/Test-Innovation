@@ -656,12 +656,15 @@
     tile.special = type;
     tile.el.classList.add('special', type);
     if (type === 'wildcard') tile.el.textContent = '🌟';
-    const x = tile.c * CELL;
-    const y = tile.r * CELL;
     tile.el.style.transitionDuration = '';
-    tile.el.style.transform = `translate(${x}px, ${y}px) scale(1.4)`;
+    tile.el.style.transform = `translate(${tile.c * CELL}px, ${tile.r * CELL}px) scale(1.4)`;
     setTimeout(() => {
-      tile.el.style.transform = `translate(${x}px, ${y}px) scale(1)`;
+      // Recompute from the tile's CURRENT position rather than reusing the
+      // coordinates captured above — if gravity moved this tile in the
+      // meantime (cells below it in the same column also cleared this pass),
+      // using stale coordinates here would snap it back to its old row,
+      // leaving its real cell looking empty even though the grid is correct.
+      tile.el.style.transform = `translate(${tile.c * CELL}px, ${tile.r * CELL}px) scale(1)`;
     }, 220);
   }
 
