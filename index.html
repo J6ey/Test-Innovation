@@ -539,8 +539,13 @@
     },
     // Creation sounds — distinct per special type, evoking the ability it grants.
     createBomb() {
-      playTone({ freq: 200, freqEnd: 55, duration: 0.24, type: 'square', gain: 0.15 });
-      playTone({ freq: 520, freqEnd: 900, duration: 0.2, type: 'sine', gain: 0.1, delay: 0.03 });
+      // An electric zap crackle igniting into a warm flame whoosh, as if the
+      // gem just caught fire.
+      playNoise({ duration: 0.06, gain: 0.2, filterFreq: 8500 });
+      playTone({ freq: 1700, freqEnd: 300, duration: 0.08, type: 'square', gain: 0.13 });
+      playNoise({ duration: 0.28, gain: 0.18, filterFreq: 1100, delay: 0.06 });
+      playTone({ freq: 180, freqEnd: 420, duration: 0.22, type: 'sawtooth', gain: 0.1, delay: 0.08 });
+      playNoise({ duration: 0.05, gain: 0.09, filterFreq: 4800, delay: 0.16 });
     },
     createCross() {
       // A quick rising three-note chime, like the gem is charging up with energy.
@@ -564,8 +569,14 @@
     },
     // Trigger/detonation sounds — played when a special gem's ability fires.
     bomb() {
-      playNoise({ duration: 0.35, gain: 0.28, filterFreq: 700 });
-      playTone({ freq: 110, freqEnd: 35, duration: 0.35, type: 'sine', gain: 0.22 });
+      // A sharp electric zap that ignites into a roaring, crackling flame burst.
+      playNoise({ duration: 0.08, gain: 0.26, filterFreq: 9000 });
+      playTone({ freq: 2000, freqEnd: 250, duration: 0.09, type: 'square', gain: 0.16 });
+      playNoise({ duration: 0.45, gain: 0.3, filterFreq: 900, delay: 0.05 });
+      playTone({ freq: 140, freqEnd: 40, duration: 0.4, type: 'sawtooth', gain: 0.22, delay: 0.06 });
+      playNoise({ duration: 0.05, gain: 0.14, filterFreq: 5000, delay: 0.15 });
+      playNoise({ duration: 0.06, gain: 0.12, filterFreq: 4200, delay: 0.24 });
+      playNoise({ duration: 0.05, gain: 0.1, filterFreq: 5600, delay: 0.32 });
     },
     cross() {
       // Electric arc: a few rapid stepped-pitch flickers plus a sharp crackle,
