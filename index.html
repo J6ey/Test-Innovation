@@ -412,6 +412,11 @@
   const SWIPE_THRESHOLD = 18;
   const WILDCARD_STAGGER_MS = 35;
   const WILDCARD_FADE_MS = 280;
+  // Gap between successive "waves" of a chain reaction (expandSpecialChain's
+  // `wave`) — an initial special's own effect gets to visibly play out before
+  // a special its blast catches fires its own, instead of everything firing
+  // at once.
+  const CHAIN_STAGGER_MS = 320;
 
   const board = document.getElementById('board');
   const scoreEl = document.getElementById('score');
@@ -954,6 +959,15 @@
   // actually be removed from the grid: a pending-special cell is scanned (so
   // it still chain-triggers its own ability) but deliberately kept OUT of
   // toClear, so it survives to become the special instead of vanishing.
+  //
+  // Each origin also records `wave` (how many blast-hops it took to discover
+  // it — 0 for a special that was directly in the initial toClear, 1 for one
+  // only reached by another special's blast, etc.) and `cells` (the set of
+  // cell keys ITS OWN ability reached, as opposed to the flat merged
+  // blastCells). Callers use `wave` to sequence effects — an initial special
+  // should visibly finish before a special its blast catches fires its own —
+  // and `cells` to give a wildcard's own target cells their distinctive
+  // laser-zap treatment instead of a generic blast.
   function expandSpecialChain(toClear, skipIds, pendingSpecials) {
     const pending = pendingSpecials || new Map();
     const bombOrigins = [];
@@ -969,6 +983,7 @@
       if (!pending.has(key)) toClear.add(key);
     }
 
+    let wave = 0;
     let changed = true;
     while (changed) {
       changed = false;
@@ -981,10 +996,11 @@
         processedSpecials.add(tile.id);
         blastCells.add(key);
         changed = true;
+        const ownCells = new Set();
 
         if (type === 'bomb' || type === 'quad') {
           const radius = type === 'quad' ? 2 : 1;
-          (type === 'quad' ? quadOrigins : bombOrigins).push({ r, c });
+          (type === 'quad' ? quadOrigins : bombOrigins).push({ r, c, wave, cells: ownCells });
           for (let dr = -radius; dr <= radius; dr++) {
             for (let dc = -radius; dc <= radius; dc++) {
               if (dr === 0 && dc === 0) continue;
@@ -994,22 +1010,25 @@
               const nKey = cellKey(nr, nc);
               markReached(nKey);
               blastCells.add(nKey);
+              ownCells.add(nKey);
             }
           }
         } else if (type === 'cross') {
-          crossOrigins.push({ r, c });
+          crossOrigins.push({ r, c, wave, cells: ownCells });
           for (let cc = 0; cc < SIZE; cc++) {
             const nKey = cellKey(r, cc);
             markReached(nKey);
             blastCells.add(nKey);
+            ownCells.add(nKey);
           }
           for (let rr = 0; rr < SIZE; rr++) {
             const nKey = cellKey(rr, c);
             markReached(nKey);
             blastCells.add(nKey);
+            ownCells.add(nKey);
           }
         } else if (type === 'wildcard') {
-          wildcardOrigins.push({ r, c });
+          wildcardOrigins.push({ r, c, wave, cells: ownCells });
           const targetColor = tile.gem;
           for (let rr = 0; rr < SIZE; rr++) {
             for (let cc = 0; cc < SIZE; cc++) {
@@ -1018,12 +1037,91 @@
               const nKey = cellKey(rr, cc);
               markReached(nKey);
               blastCells.add(nKey);
+              ownCells.add(nKey);
             }
           }
         }
       }
+      wave++;
     }
     return { bombOrigins, quadOrigins, crossOrigins, wildcardOrigins, blastCells, processedSpecials };
+  }
+
+  // Renders a chain reaction's clearing of `removed` tiles: each origin's own
+  // visual (shockwave/beams) fires staggered by its `wave` (CHAIN_STAGGER_MS
+  // apart) so an initial special's effect visibly plays out before a special
+  // its blast catches fires its own, instead of everything happening at once.
+  // A wildcard origin also draws a laser bolt to each of its own target
+  // cells — the same "zapping" look its direct-swipe activation has — instead
+  // of those cells just vanishing like a generic blast. Returns the largest
+  // delay (ms) scheduled, so the caller knows how long to wait before moving on.
+  function renderChainClear(removed, blastCells, convergeTarget, origins) {
+    const { bombOrigins, quadOrigins, crossOrigins, wildcardOrigins } = origins;
+    const cellDelay = new Map();
+    const laserSource = new Map();
+
+    function claim(key, delay, source) {
+      const existing = cellDelay.get(key);
+      if (existing !== undefined && existing <= delay) return;
+      cellDelay.set(key, delay);
+      if (source) laserSource.set(key, source);
+      else laserSource.delete(key);
+    }
+
+    for (const origin of bombOrigins) {
+      const d = origin.wave * CHAIN_STAGGER_MS;
+      claim(cellKey(origin.r, origin.c), d);
+      for (const key of origin.cells) claim(key, d);
+      const p = cellCenterPx(origin.r, origin.c);
+      setTimeout(() => spawnShockwave(p.x, p.y, { size: CELL * 3.2, durationMs: 550 }), d);
+    }
+    for (const origin of quadOrigins) {
+      const d = origin.wave * CHAIN_STAGGER_MS;
+      claim(cellKey(origin.r, origin.c), d);
+      for (const key of origin.cells) claim(key, d);
+      const p = cellCenterPx(origin.r, origin.c);
+      setTimeout(() => spawnShockwave(p.x, p.y, { size: CELL * 5.2, variant: 'quad', durationMs: 650 }), d);
+    }
+    for (const origin of crossOrigins) {
+      const d = origin.wave * CHAIN_STAGGER_MS;
+      claim(cellKey(origin.r, origin.c), d);
+      for (const key of origin.cells) claim(key, d);
+      setTimeout(() => spawnCrossBeams(origin), d);
+    }
+    for (const origin of wildcardOrigins) {
+      const d = origin.wave * CHAIN_STAGGER_MS;
+      claim(cellKey(origin.r, origin.c), d);
+      const p = cellCenterPx(origin.r, origin.c);
+      setTimeout(() => spawnShockwave(p.x, p.y, { size: SIZE * CELL * 1.1, rainbow: true, durationMs: 600 }), d);
+      for (const key of origin.cells) {
+        const { r: tr, c: tc } = parseCellKey(key);
+        const dist = Math.hypot(tr - origin.r, tc - origin.c);
+        claim(key, d + dist * WILDCARD_STAGGER_MS, { r: origin.r, c: origin.c });
+      }
+    }
+
+    let maxDelay = 0;
+    for (const tile of removed) {
+      const key = cellKey(tile.r, tile.c);
+      const delay = cellDelay.has(key) ? cellDelay.get(key) : 0;
+      maxDelay = Math.max(maxDelay, delay);
+      const source = laserSource.get(key);
+      setTimeout(() => {
+        if (source) {
+          spawnLaserBeam(cellCenterPx(source.r, source.c), cellCenterPx(tile.r, tile.c));
+          tile.el.classList.add('zapped');
+        }
+        if (blastCells.has(key)) {
+          explodeTile(tile);
+        } else if (convergeTarget.has(key)) {
+          const target = convergeTarget.get(key);
+          convergeTile(tile, target.r, target.c);
+        } else {
+          setScale(tile, 0);
+        }
+      }, delay);
+    }
+    return maxDelay;
   }
 
   // The set of cells a special gem's own ability would clear, centered on its
@@ -1744,32 +1842,14 @@
         grid[r][c] = null;
       }
 
-      for (const origin of bombOrigins) {
-        const p = cellCenterPx(origin.r, origin.c);
-        spawnShockwave(p.x, p.y, { size: CELL * 3.2, durationMs: 550 });
-      }
-      for (const origin of quadOrigins) {
-        const p = cellCenterPx(origin.r, origin.c);
-        spawnShockwave(p.x, p.y, { size: CELL * 5.2, variant: 'quad', durationMs: 650 });
-      }
-      for (const origin of crossOrigins) {
-        spawnCrossBeams(origin);
-      }
-      for (const origin of wildcardOrigins) {
-        const p = cellCenterPx(origin.r, origin.c);
-        spawnShockwave(p.x, p.y, { size: SIZE * CELL * 1.1, rainbow: true, durationMs: 600 });
-      }
-      for (const tile of removed) {
-        const key = cellKey(tile.r, tile.c);
-        if (blastCells.has(key)) {
-          explodeTile(tile);
-        } else if (convergeTarget.has(key)) {
-          const target = convergeTarget.get(key);
-          convergeTile(tile, target.r, target.c);
-        } else {
-          setScale(tile, 0);
-        }
-      }
+      // Each origin's own visual (and, for a wildcard, its laser-zap on each
+      // of its own target cells) is staggered by wave — the special that
+      // directly matched fires immediately, but a special its blast catches
+      // (e.g. a bomb detonating into a forming 5-match wildcard) fires a beat
+      // later, so its effect visibly plays out on its own instead of
+      // vanishing silently or firing simultaneously with the one that caught it.
+      const maxChainDelay = renderChainClear(removed, blastCells, convergeTarget,
+        { bombOrigins, quadOrigins, crossOrigins, wildcardOrigins });
 
       // Let the converging gems arrive before the spawn cell visibly pops into
       // its special form — always true here, since a spawning run/group always
@@ -1787,11 +1867,18 @@
       scoreEl.textContent = score;
       const spawnedTypes = [...spawnMap.values()];
       const spawnedSet = new Set(spawnedTypes);
-      // Trigger sounds for any raw specials caught and detonated by this clear...
-      if (bombOrigins.length > 0) sfx.bomb();
-      if (quadOrigins.length > 0) sfx.quad();
-      if (crossOrigins.length > 0) sfx.cross();
-      if (wildcardOrigins.length > 0) sfx.wildcardZap();
+      // Trigger sounds for any raw specials caught and detonated by this clear,
+      // one per distinct wave so they land in step with their staggered visuals
+      // (an initial bomb's sound plays immediately; a wildcard it catches plays
+      // its sound a beat later, instead of both firing at once).
+      function scheduleTypeSound(origins, fn) {
+        const waves = new Set(origins.map(o => o.wave));
+        for (const w of waves) setTimeout(fn, w * CHAIN_STAGGER_MS);
+      }
+      scheduleTypeSound(bombOrigins, () => sfx.bomb());
+      scheduleTypeSound(quadOrigins, () => sfx.quad());
+      scheduleTypeSound(crossOrigins, () => sfx.cross());
+      scheduleTypeSound(wildcardOrigins, () => sfx.wildcardZap());
       // ...plus a distinct creation sound for whichever new special gem(s) this
       // clear spawns, so a match feels tied to the ability it just granted.
       if (spawnedSet.has('bomb')) sfx.createBomb();
@@ -1825,7 +1912,7 @@
       let waitMs = MATCH_MS;
       if (convergeTarget.size > 0) waitMs = Math.max(waitMs, CONVERGE_MS);
       if (bombOrigins.length > 0 || crossOrigins.length > 0 || quadOrigins.length > 0 || wildcardOrigins.length > 0) {
-        waitMs = Math.max(waitMs, EXPLODE_MS);
+        waitMs = Math.max(waitMs, maxChainDelay + EXPLODE_MS);
       }
       await sleep(waitMs);
       for (const tile of removed) tile.el.remove();
