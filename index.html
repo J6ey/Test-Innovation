@@ -514,7 +514,7 @@
     osc.stop(start + duration + 0.02);
   }
 
-  function playNoise({ duration, gain = 0.2, delay = 0, filterFreq = 1200, filterFreqEnd, filterType = 'lowpass', Q }) {
+  function playNoise({ duration, gain = 0.2, delay = 0, filterFreq = 1200, filterType = 'lowpass', Q }) {
     if (!soundEnabled) return;
     const ctx = getAudioCtx();
     if (!ctx) return;
@@ -527,11 +527,7 @@
     noise.buffer = buffer;
     const filter = ctx.createBiquadFilter();
     filter.type = filterType;
-    filter.frequency.setValueAtTime(filterFreq, start);
-    // Sweeping the filter's own center frequency over time (rather than a
-    // static cutoff) is what makes noise read as a "whoosh" sweeping past,
-    // instead of a flat burst.
-    if (filterFreqEnd) filter.frequency.exponentialRampToValueAtTime(Math.max(filterFreqEnd, 1), start + duration);
+    filter.frequency.value = filterFreq;
     // A bandpass filter with a raised Q rings around its center frequency
     // instead of just rolling off — that resonant ring is what reads as
     // "hollow" (like a boom inside a shell) rather than a flat rumble.
@@ -612,14 +608,37 @@
       playTone({ freq: 2100, freqEnd: 3200, duration: 0.06, type: 'square', gain: 0.08, delay: 0.29 });
       playTone({ freq: 2700, freqEnd: 3800, duration: 0.06, type: 'square', gain: 0.07, delay: 0.36 });
     },
-    // Two non-wildcard specials swapped directly together: a rising swoosh
-    // (a swept bandpass noise sweep) crashing into a thunder crack and rumble.
-    specialCombo() {
-      playNoise({ duration: 0.3, gain: 0.18, filterFreq: 250, filterFreqEnd: 4500, filterType: 'bandpass', Q: 1.4 });
-      playTone({ freq: 200, freqEnd: 900, duration: 0.26, type: 'sine', gain: 0.08 });
-      playNoise({ duration: 0.05, gain: 0.26, filterFreq: 9000, filterType: 'highpass', delay: 0.26 });
-      playTone({ freq: 90, freqEnd: 32, duration: 0.5, type: 'sine', gain: 0.26, delay: 0.27 });
-      playNoise({ duration: 0.55, gain: 0.24, filterFreq: 450, delay: 0.28 });
+    // Two bombs swapped directly together: a bigger, deeper double explosion
+    // than either bomb alone.
+    bombCombo() {
+      playNoise({ duration: 0.05, gain: 0.32, filterFreq: 9000, filterType: 'highpass' });
+      playTone({ freq: 2600, freqEnd: 400, duration: 0.08, type: 'square', gain: 0.18 });
+      playTone({ freq: 70, freqEnd: 22, duration: 0.3, type: 'sine', gain: 0.4 });
+      playNoise({ duration: 0.5, gain: 0.32, filterFreq: 320, filterType: 'bandpass', Q: 2.2, delay: 0.03 });
+      playTone({ freq: 60, freqEnd: 18, duration: 0.4, type: 'sine', gain: 0.3, delay: 0.12 });
+      playNoise({ duration: 0.4, gain: 0.24, filterFreq: 260, filterType: 'bandpass', Q: 2, delay: 0.14 });
+      playNoise({ duration: 0.16, gain: 0.16, filterFreq: 5500, delay: 0.1 });
+    },
+    // Two crosses swapped directly together: a bigger, denser electric storm
+    // — overlapping arcs and a heavier thunder crack than a single cross.
+    crossCombo() {
+      playTone({ freq: 2200, freqEnd: 350, duration: 0.05, type: 'square', gain: 0.16 });
+      playTone({ freq: 2800, freqEnd: 500, duration: 0.04, type: 'square', gain: 0.14, delay: 0.04 });
+      playTone({ freq: 1600, freqEnd: 250, duration: 0.06, type: 'square', gain: 0.15, delay: 0.09 });
+      playTone({ freq: 2400, freqEnd: 400, duration: 0.05, type: 'square', gain: 0.13, delay: 0.14 });
+      playNoise({ duration: 0.15, gain: 0.26, filterFreq: 7500 });
+      playNoise({ duration: 0.5, gain: 0.24, filterFreq: 700, delay: 0.1 });
+      playTone({ freq: 70, freqEnd: 30, duration: 0.45, type: 'sine', gain: 0.2, delay: 0.12 });
+    },
+    // A cross swapped with a bomb: an electric arc crackle blending into an
+    // explosive flame crackle -- a genuine hybrid of both sounds.
+    hybridCombo() {
+      playTone({ freq: 2000, freqEnd: 350, duration: 0.05, type: 'square', gain: 0.15 });
+      playTone({ freq: 2600, freqEnd: 500, duration: 0.04, type: 'square', gain: 0.12, delay: 0.05 });
+      playNoise({ duration: 0.1, gain: 0.22, filterFreq: 7500 });
+      playNoise({ duration: 0.06, gain: 0.26, filterFreq: 9000, filterType: 'highpass', delay: 0.12 });
+      playTone({ freq: 100, freqEnd: 30, duration: 0.32, type: 'sine', gain: 0.3, delay: 0.13 });
+      playNoise({ duration: 0.4, gain: 0.26, filterFreq: 380, filterType: 'bandpass', Q: 2.4, delay: 0.15 });
     },
     reshuffle() {
       playTone({ freq: 260, freqEnd: 340, duration: 0.22, type: 'sine', gain: 0.1 });
@@ -871,25 +890,35 @@
     beam.addEventListener('animationend', () => beam.remove());
   }
 
-  // Two beams sweeping the full row and column a cross gem is on.
-  function spawnCrossBeams(origin) {
-    const p = cellCenterPx(origin.r, origin.c);
+  // Beams sweeping the full row and column a cross gem is on. thickness adds
+  // extra parallel beams on each side (thickness=1 sweeps 3 rows and 3
+  // columns instead of just 1) — used for the stronger cross+cross combo.
+  function spawnCrossBeams(origin, thickness = 0) {
+    for (let dr = -thickness; dr <= thickness; dr++) {
+      const r = origin.r + dr;
+      if (r < 0 || r >= SIZE) continue;
+      const p = cellCenterPx(r, origin.c);
+      const hBeam = document.createElement('div');
+      hBeam.className = 'beam beam-h';
+      hBeam.style.top = (p.y - 4) + 'px';
+      hBeam.style.left = '0px';
+      hBeam.style.width = boardSize + 'px';
+      board.appendChild(hBeam);
+      hBeam.addEventListener('animationend', () => hBeam.remove());
+    }
 
-    const hBeam = document.createElement('div');
-    hBeam.className = 'beam beam-h';
-    hBeam.style.top = (p.y - 4) + 'px';
-    hBeam.style.left = '0px';
-    hBeam.style.width = boardSize + 'px';
-    board.appendChild(hBeam);
-    hBeam.addEventListener('animationend', () => hBeam.remove());
-
-    const vBeam = document.createElement('div');
-    vBeam.className = 'beam beam-v';
-    vBeam.style.left = (p.x - 4) + 'px';
-    vBeam.style.top = '0px';
-    vBeam.style.height = boardSize + 'px';
-    board.appendChild(vBeam);
-    vBeam.addEventListener('animationend', () => vBeam.remove());
+    for (let dc = -thickness; dc <= thickness; dc++) {
+      const c = origin.c + dc;
+      if (c < 0 || c >= SIZE) continue;
+      const p = cellCenterPx(origin.r, c);
+      const vBeam = document.createElement('div');
+      vBeam.className = 'beam beam-v';
+      vBeam.style.left = (p.x - 4) + 'px';
+      vBeam.style.top = '0px';
+      vBeam.style.height = boardSize + 'px';
+      board.appendChild(vBeam);
+      vBeam.addEventListener('animationend', () => vBeam.remove());
+    }
   }
 
   function spawnShockwave(cx, cy, opts) {
@@ -1095,31 +1124,36 @@
     return maxDelay;
   }
 
-  // The set of cells a special gem's own ability would clear, centered on its
-  // current position. Used to combine two specials' effects when they're
-  // swapped directly into each other (see triggerSpecialCombo).
-  function specialAreaCells(tile) {
-    const cells = new Set([cellKey(tile.r, tile.c)]);
-    if (tile.special === 'bomb') {
-      const radius = 1;
-      for (let dr = -radius; dr <= radius; dr++) {
-        for (let dc = -radius; dc <= radius; dc++) {
-          const nr = tile.r + dr;
-          const nc = tile.c + dc;
-          if (nr < 0 || nr >= SIZE || nc < 0 || nc >= SIZE) continue;
-          cells.add(cellKey(nr, nc));
-        }
+  // A bomb-style blast area of the given radius centered on (r,c). Used both
+  // for a plain bomb (radius 1) and the bigger radius two bombs combine into
+  // (see triggerSpecialCombo).
+  function bombAreaCells(r, c, radius) {
+    const cells = new Set();
+    for (let dr = -radius; dr <= radius; dr++) {
+      for (let dc = -radius; dc <= radius; dc++) {
+        const nr = r + dr;
+        const nc = c + dc;
+        if (nr < 0 || nr >= SIZE || nc < 0 || nc >= SIZE) continue;
+        cells.add(cellKey(nr, nc));
       }
-    } else if (tile.special === 'cross') {
-      for (let cc = 0; cc < SIZE; cc++) cells.add(cellKey(tile.r, cc));
-      for (let rr = 0; rr < SIZE; rr++) cells.add(cellKey(rr, tile.c));
-    } else if (tile.special === 'wildcard') {
-      for (let rr = 0; rr < SIZE; rr++) {
-        for (let cc = 0; cc < SIZE; cc++) {
-          const t = grid[rr][cc];
-          if (t && t.gem === tile.gem) cells.add(cellKey(rr, cc));
-        }
-      }
+    }
+    return cells;
+  }
+
+  // A cross-style row+column clear through (r,c). thickness adds extra
+  // parallel rows/columns on each side (thickness=1 clears 3 rows and 3
+  // columns instead of just 1) — used for the stronger cross+cross combo.
+  function crossLineCells(r, c, thickness) {
+    const cells = new Set();
+    for (let dr = -thickness; dr <= thickness; dr++) {
+      const rr = r + dr;
+      if (rr < 0 || rr >= SIZE) continue;
+      for (let cc = 0; cc < SIZE; cc++) cells.add(cellKey(rr, cc));
+    }
+    for (let dc = -thickness; dc <= thickness; dc++) {
+      const cc = c + dc;
+      if (cc < 0 || cc >= SIZE) continue;
+      for (let rr = 0; rr < SIZE; rr++) cells.add(cellKey(rr, cc));
     }
     return cells;
   }
@@ -1626,12 +1660,21 @@
   }
 
   // Swapping two special gems directly into each other combines their
-  // abilities into one bigger, cooler effect instead of just triggering one:
-  // each contributes its own blast area (a bomb's 3x3, a cross's row+column,
-  // a wildcard's whole color) around wherever it ended up after the swap.
-  // Two wildcards together are the ultimate combo — they wipe the entire board.
+  // abilities into one bigger, cooler effect instead of just triggering one.
+  // The effect depends on which pair swapped:
+  //  - two wildcards: the ultimate combo, wiping the entire board.
+  //  - two bombs: one bigger explosion (radius 3 instead of 1) at each origin.
+  //  - two crosses: a thicker elimination (3 rows/columns instead of 1) at
+  //    each origin.
+  //  - a cross + a bomb: a genuine hybrid — each origin gets BOTH abilities
+  //    (its own row+column AND a blast radius), not just each gem doing its
+  //    own separate thing.
   async function triggerSpecialCombo(tileA, tileB) {
     const bothWildcard = tileA.special === 'wildcard' && tileB.special === 'wildcard';
+    const bothBomb = tileA.special === 'bomb' && tileB.special === 'bomb';
+    const bothCross = tileA.special === 'cross' && tileB.special === 'cross';
+    // The only remaining pairing once wildcard/bomb/bomb/cross/cross are
+    // ruled out is a cross swapped with a bomb.
     const originA = { r: tileA.r, c: tileA.c };
     const originB = { r: tileB.r, c: tileB.c };
 
@@ -1643,8 +1686,15 @@
           if (grid[r][c]) toClear.add(cellKey(r, c));
         }
       }
+    } else if (bothBomb) {
+      toClear = new Set([...bombAreaCells(originA.r, originA.c, 3), ...bombAreaCells(originB.r, originB.c, 3)]);
+    } else if (bothCross) {
+      toClear = new Set([...crossLineCells(originA.r, originA.c, 1), ...crossLineCells(originB.r, originB.c, 1)]);
     } else {
-      toClear = new Set([...specialAreaCells(tileA), ...specialAreaCells(tileB)]);
+      toClear = new Set([
+        ...crossLineCells(originA.r, originA.c, 0), ...bombAreaCells(originA.r, originA.c, 1),
+        ...crossLineCells(originB.r, originB.c, 0), ...bombAreaCells(originB.r, originB.c, 1),
+      ]);
     }
 
     const { bombOrigins, crossOrigins, wildcardOrigins, blastCells } =
@@ -1662,23 +1712,23 @@
     const pxA = cellCenterPx(originA.r, originA.c);
     const pxB = cellCenterPx(originB.r, originB.c);
 
-    // Two wildcards together still wipe the whole board, but with the same
-    // laser-zap look and sound as an ordinary wildcard activation (just
-    // doubled, rippling out from both origins) instead of a generic combo
-    // explosion. Two other specials combined keep the combo shockwave, just
-    // with a swoosh-and-thunder sound instead.
     if (bothWildcard) {
+      // The same laser-zap look an ordinary wildcard activation has, just
+      // doubled — one rainbow ring rippling out from each origin.
       spawnShockwave(pxA.x, pxA.y, { size: SIZE * CELL * 1.1, rainbow: true, durationMs: 600 });
       spawnShockwave(pxB.x, pxB.y, { size: SIZE * CELL * 1.1, rainbow: true, durationMs: 600 });
+    } else if (bothBomb) {
+      spawnShockwave(pxA.x, pxA.y, { size: CELL * 7.5, durationMs: 700 });
+      spawnShockwave(pxB.x, pxB.y, { size: CELL * 7.5, durationMs: 700 });
+    } else if (bothCross) {
+      spawnCrossBeams(originA, 1);
+      spawnCrossBeams(originB, 1);
     } else {
-      spawnShockwave((pxA.x + pxB.x) / 2, (pxA.y + pxB.y) / 2, {
-        size: SIZE * CELL * 1.8,
-        variant: 'combo',
-        durationMs: 750,
-      });
+      spawnCrossBeams(originA);
+      spawnCrossBeams(originB);
+      spawnShockwave(pxA.x, pxA.y, { size: CELL * 3.2, durationMs: 550 });
+      spawnShockwave(pxB.x, pxB.y, { size: CELL * 3.2, durationMs: 550 });
     }
-    if (tileA.special === 'cross') spawnCrossBeams(originA);
-    if (tileB.special === 'cross') spawnCrossBeams(originB);
     for (const origin of bombOrigins) {
       const p = cellCenterPx(origin.r, origin.c);
       spawnShockwave(p.x, p.y, { size: CELL * 3.2, durationMs: 550 });
@@ -1715,9 +1765,17 @@
     const gained = removed.length * 15 + 250;
     score += gained;
     scoreEl.textContent = score;
-    messageEl.textContent = bothWildcard ? `ULTIMATE COMBO! +${gained}` : `MEGA COMBO! +${gained}`;
+    let label;
+    if (bothWildcard) label = 'ULTIMATE COMBO';
+    else if (bothBomb) label = 'MEGA EXPLOSION';
+    else if (bothCross) label = 'MEGA CROSS';
+    else label = 'HYBRID BLAST';
+    messageEl.textContent = `${label}! +${gained}`;
+
     if (bothWildcard) sfx.wildcardZap();
-    else sfx.specialCombo();
+    else if (bothBomb) sfx.bombCombo();
+    else if (bothCross) sfx.crossCombo();
+    else sfx.hybridCombo();
 
     await sleep(maxDelay + EXPLODE_MS);
     for (const tile of removed) tile.el.remove();
