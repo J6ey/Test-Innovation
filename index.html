@@ -514,7 +514,7 @@
     osc.stop(start + duration + 0.02);
   }
 
-  function playNoise({ duration, gain = 0.2, delay = 0, filterFreq = 1200, filterType = 'lowpass', Q }) {
+  function playNoise({ duration, gain = 0.2, delay = 0, filterFreq = 1200, filterFreqEnd, filterType = 'lowpass', Q }) {
     if (!soundEnabled) return;
     const ctx = getAudioCtx();
     if (!ctx) return;
@@ -527,7 +527,11 @@
     noise.buffer = buffer;
     const filter = ctx.createBiquadFilter();
     filter.type = filterType;
-    filter.frequency.value = filterFreq;
+    filter.frequency.setValueAtTime(filterFreq, start);
+    // Sweeping the filter's own center frequency over time (rather than a
+    // static cutoff) is what makes noise read as a "whoosh" sweeping past,
+    // instead of a flat burst.
+    if (filterFreqEnd) filter.frequency.exponentialRampToValueAtTime(Math.max(filterFreqEnd, 1), start + duration);
     // A bandpass filter with a raised Q rings around its center frequency
     // instead of just rolling off — that resonant ring is what reads as
     // "hollow" (like a boom inside a shell) rather than a flat rumble.
@@ -608,10 +612,14 @@
       playTone({ freq: 2100, freqEnd: 3200, duration: 0.06, type: 'square', gain: 0.08, delay: 0.29 });
       playTone({ freq: 2700, freqEnd: 3800, duration: 0.06, type: 'square', gain: 0.07, delay: 0.36 });
     },
-    megaCombo() {
-      playTone({ freq: 220, freqEnd: 1700, duration: 0.55, type: 'sawtooth', gain: 0.16 });
-      playTone({ freq: 440, freqEnd: 2000, duration: 0.5, type: 'sine', gain: 0.12, delay: 0.05 });
-      playNoise({ duration: 0.45, gain: 0.22, filterFreq: 2200, delay: 0.08 });
+    // Two non-wildcard specials swapped directly together: a rising swoosh
+    // (a swept bandpass noise sweep) crashing into a thunder crack and rumble.
+    specialCombo() {
+      playNoise({ duration: 0.3, gain: 0.18, filterFreq: 250, filterFreqEnd: 4500, filterType: 'bandpass', Q: 1.4 });
+      playTone({ freq: 200, freqEnd: 900, duration: 0.26, type: 'sine', gain: 0.08 });
+      playNoise({ duration: 0.05, gain: 0.26, filterFreq: 9000, filterType: 'highpass', delay: 0.26 });
+      playTone({ freq: 90, freqEnd: 32, duration: 0.5, type: 'sine', gain: 0.26, delay: 0.27 });
+      playNoise({ duration: 0.55, gain: 0.24, filterFreq: 450, delay: 0.28 });
     },
     reshuffle() {
       playTone({ freq: 260, freqEnd: 340, duration: 0.22, type: 'sine', gain: 0.1 });
@@ -1653,11 +1661,22 @@
 
     const pxA = cellCenterPx(originA.r, originA.c);
     const pxB = cellCenterPx(originB.r, originB.c);
-    spawnShockwave((pxA.x + pxB.x) / 2, (pxA.y + pxB.y) / 2, {
-      size: SIZE * CELL * (bothWildcard ? 2.2 : 1.8),
-      variant: 'combo',
-      durationMs: 750,
-    });
+
+    // Two wildcards together still wipe the whole board, but with the same
+    // laser-zap look and sound as an ordinary wildcard activation (just
+    // doubled, rippling out from both origins) instead of a generic combo
+    // explosion. Two other specials combined keep the combo shockwave, just
+    // with a swoosh-and-thunder sound instead.
+    if (bothWildcard) {
+      spawnShockwave(pxA.x, pxA.y, { size: SIZE * CELL * 1.1, rainbow: true, durationMs: 600 });
+      spawnShockwave(pxB.x, pxB.y, { size: SIZE * CELL * 1.1, rainbow: true, durationMs: 600 });
+    } else {
+      spawnShockwave((pxA.x + pxB.x) / 2, (pxA.y + pxB.y) / 2, {
+        size: SIZE * CELL * 1.8,
+        variant: 'combo',
+        durationMs: 750,
+      });
+    }
     if (tileA.special === 'cross') spawnCrossBeams(originA);
     if (tileB.special === 'cross') spawnCrossBeams(originB);
     for (const origin of bombOrigins) {
@@ -1670,18 +1689,37 @@
       spawnShockwave(p.x, p.y, { size: SIZE * CELL * 1.1, rainbow: true, durationMs: 600 });
     }
 
+    let maxDelay = 0;
     for (const tile of removed) {
-      tile.el.classList.add('zapped');
-      explodeTile(tile);
+      if (bothWildcard) {
+        // Zap outward from whichever origin is closer, the same ripple a
+        // single wildcard's own activation uses.
+        const distA = Math.hypot(tile.r - originA.r, tile.c - originA.c);
+        const distB = Math.hypot(tile.r - originB.r, tile.c - originB.c);
+        const useA = distA <= distB;
+        const delay = Math.min(distA, distB) * WILDCARD_STAGGER_MS;
+        maxDelay = Math.max(maxDelay, delay);
+        const isOrigin = tile.id === tileA.id || tile.id === tileB.id;
+        const targetPx = cellCenterPx(tile.r, tile.c);
+        setTimeout(() => {
+          if (!isOrigin) spawnLaserBeam(useA ? pxA : pxB, targetPx);
+          tile.el.classList.add('zapped');
+          explodeTile(tile);
+        }, delay);
+      } else {
+        tile.el.classList.add('zapped');
+        explodeTile(tile);
+      }
     }
 
     const gained = removed.length * 15 + 250;
     score += gained;
     scoreEl.textContent = score;
     messageEl.textContent = bothWildcard ? `ULTIMATE COMBO! +${gained}` : `MEGA COMBO! +${gained}`;
-    sfx.megaCombo();
+    if (bothWildcard) sfx.wildcardZap();
+    else sfx.specialCombo();
 
-    await sleep(EXPLODE_MS);
+    await sleep(maxDelay + EXPLODE_MS);
     for (const tile of removed) tile.el.remove();
 
     applyGravityAnimated();
